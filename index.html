@@ -313,4 +313,1488 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       </button>
       <button class="icon-btn" onclick="goPage('settings')">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="hero-slider-wrap">
+    <div class="hero-slider" id="heroSlider"></div>
+  </div>
+
+  <div class="row-section">
+    <div class="row-head"><div class="row-title" data-i18n="row.continue">İzləməyə davam et</div></div>
+    <div id="continueRow"><div class="empty-row" id="continueEmpty" data-i18n="row.continueEmpty">Hələ izlədiyin bir bölüm yoxdur</div></div>
+  </div>
+
+  <div class="row-section">
+    <div class="row-head">
+      <div class="row-title" data-i18n="row.library">Kitabxana</div>
+      <div class="row-sub" onclick="goPage('library')" data-i18n="row.all">hamısı</div>
+    </div>
+    <div id="row-library"><div class="empty-row" id="libraryEmpty" data-i18n="row.libraryEmpty">Kitabxana boşdur. Admin paneldən anime əlavə et.</div></div>
+  </div>
+
+  <div id="categoryRows"></div>
+</div>
+
+<!-- ============ SEARCH PAGE (kitaplık içi arama) ============ -->
+<div id="page-search" class="page hidden">
+  <div class="topbar">
+    <button class="icon-btn" onclick="goPage('home')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="brand" data-i18n="search.title">Axtarış</div>
+    <div style="width:38px"></div>
+  </div>
+  <div class="search-wrap">
+    <div class="search-box">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="searchInput" data-i18n-placeholder="search.placeholder" placeholder="Anime adı yaz..." oninput="renderSearch()">
+    </div>
+  </div>
+  <div id="searchResults" style="padding:0 18px; display:flex; flex-direction:column; gap:10px;"></div>
+</div>
+
+<!-- ============ LIBRARY MANAGE PAGE ============ -->
+<div id="page-library" class="page hidden">
+  <div class="topbar">
+    <button class="icon-btn" onclick="goPage('home')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="brand" data-i18n="library.title">Kitabxana</div>
+    <div style="width:38px"></div>
+  </div>
+  <div id="publicLibraryList" style="padding:0 18px;"></div>
+</div>
+
+<!-- ============ DETAIL PAGE ============ -->
+<div id="page-detail" class="page hidden">
+  <div class="detail-hero" id="detailHero">
+    <button class="detail-back" onclick="goPage('home')">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+  </div>
+  <div class="detail-body">
+    <div class="detail-title" id="detailTitle">—</div>
+    <div class="detail-tags" id="detailTags"></div>
+    <div class="detail-desc" id="detailDesc"></div>
+    <div id="seasonSelector" style="display:flex; gap:8px; overflow-x:auto; margin-bottom:16px;"></div>
+    <div class="detail-actions">
+      <button class="btn-primary" onclick="playEpisode(1)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <span data-i18n="detail.watch">İzlə</span>
+      </button>
+    </div>
+    <div class="ep-section-title" data-i18n="detail.episodes">Bölümlər</div>
+    <div id="episodeList"></div>
+    <div style="height:20px"></div>
+  </div>
+</div>
+
+<!-- ============ PLAYER PAGE ============ -->
+<div id="page-player" class="page hidden">
+  <div class="topbar">
+    <button class="icon-btn" onclick="stopPlayerAndGoBack()">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="brand" style="font-size:15px" data-i18n="player.title">Oynadıcı</div>
+    <div style="width:38px"></div>
+  </div>
+
+  <div class="player-frame" id="playerFrame">
+    <svg id="playerPlaceholderIcon" width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#8B8F9C" stroke-width="1.6"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>
+    <div class="ph-text" id="playerPlaceholderText" data-i18n="player.noSource">Video mənbəyi hələ bağlanmayıb.<br>Öz videonu əlavə edəndə burda oynayacaq.</div>
+
+    <!-- Settings panel now lives INSIDE playerFrame so it stays visible and
+         positioned correctly when the frame itself goes fullscreen (landscape). -->
+    <div id="playerSettingsPanel" class="hidden" style="position:absolute; top:0; right:0; bottom:0; width:min(280px,80%); z-index:10; padding:16px; background:rgba(10,12,18,0.96); overflow-y:auto;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+        <div style="font-size:13px; font-weight:800; color:#fff;" data-i18n="player.settingsTitle">Ayarlar</div>
+        <button onclick="togglePlayerSettings()" style="background:none;border:none;color:#fff;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <div id="qualityRow" style="margin-bottom:14px;">
+        <div class="settings-label" style="margin-bottom:8px; color:#aaa;" data-i18n="player.quality">Keyfiyyət</div>
+        <div class="lang-options" id="qualityOptions" style="padding:0;"></div>
+      </div>
+      <div id="speedRow" style="margin-bottom:14px;">
+        <div class="settings-label" style="margin-bottom:8px; color:#aaa;" data-i18n="player.speed">Sürət</div>
+        <div class="lang-options" id="speedOptions" style="padding:0;"></div>
+      </div>
+      <div class="settings-row" style="padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.1);">
+        <div>
+          <div class="settings-row-label" style="font-size:13px; color:#fff;" data-i18n="settings.autoplay">Avtomatik növbəti bölüm</div>
+        </div>
+        <div class="toggle" id="toggleAutoplayPlayer" onclick="toggleSetting('autoplay', this)"><div class="toggle-knob"></div></div>
+      </div>
+      <div class="settings-row" style="padding:10px 0 0;">
+        <div>
+          <div class="settings-row-label" style="font-size:13px; color:#fff;" data-i18n="settings.skipIntro">İntro-nu ötür (90san)</div>
+        </div>
+        <div class="toggle" id="toggleSkipIntroPlayer" onclick="toggleSetting('skipIntro', this)"><div class="toggle-knob"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="player-info">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+      <button class="icon-btn" onclick="playAdjacentEpisode(-1)" title="Prev episode">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M19 20L9 12l10-8v16z"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+      </button>
+      <div style="flex:1; min-width:0;">
+        <div class="player-title" id="playerTitle">—</div>
+        <div class="player-sub" id="playerSub">Bölüm 1</div>
+      </div>
+      <button class="icon-btn" onclick="togglePlayerSettings()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <button class="icon-btn" onclick="playAdjacentEpisode(1)" title="Next episode">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l10 8-10 8V4z"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ ADMIN LOGIN GATE ============ -->
+<!-- ============ USER AUTH PAGE ============ -->
+<div id="page-auth" class="page hidden">
+  <div class="topbar">
+    <button class="icon-btn" onclick="goPage('settings')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="brand" style="font-size:16px" data-i18n="auth.title">Hesab</div>
+    <div style="width:38px"></div>
+  </div>
+  <div style="padding:20px 24px;">
+    <div id="authUsernameRow" style="margin-bottom:12px;">
+      <input type="text" id="authUsername" data-i18n-placeholder="auth.username" placeholder="İstifadəçi adı" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:13px;padding:14px 16px;color:var(--text);font-size:14px;outline:none;">
+    </div>
+    <input type="email" id="authEmail" data-i18n-placeholder="auth.email" placeholder="E-poçt" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:13px;padding:14px 16px;color:var(--text);font-size:14px;outline:none;margin-bottom:12px;">
+    <input type="password" id="authPassword" data-i18n-placeholder="auth.password" placeholder="Şifrə" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:13px;padding:14px 16px;color:var(--text);font-size:14px;outline:none;margin-bottom:16px;">
+    <button class="btn-primary" id="authSubmitBtn" style="width:100%;padding:14px;" onclick="signUp()" data-i18n="auth.signup">Hesab yarat</button>
+    <div id="authError" style="color:var(--danger);font-size:12.5px;font-weight:700;margin-top:12px;display:none;"></div>
+    <div id="authToggleText" onclick="toggleAuthMode()" style="text-align:center;margin-top:18px;font-size:12.5px;color:var(--text-dim);font-weight:600;cursor:pointer;" data-i18n="auth.toggleToSignin">Artıq hesabın var? Giriş et</div>
+  </div>
+</div>
+
+<div id="page-adminlogin" class="page hidden">
+  <div class="topbar">
+    <button class="icon-btn" onclick="goPage('home')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="brand" style="font-size:16px">Admin girişi</div>
+    <div style="width:38px"></div>
+  </div>
+  <div style="padding:40px 24px; text-align:center;">
+    <div style="width:56px;height:56px;border-radius:16px;background:color-mix(in srgb, var(--accent) 16%, transparent);display:flex;align-items:center;justify-content:center;margin:0 auto 18px;color:var(--accent);">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    </div>
+    <div style="font-size:13px;color:var(--text-dim);margin-bottom:18px;">Bu bölmə yalnız idarəçi üçündür</div>
+    <input type="password" id="adminPassInput" placeholder="Şifrə" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:13px;padding:14px 16px;color:var(--text);font-size:15px;text-align:center;letter-spacing:2px;outline:none;margin-bottom:12px;" onkeydown="if(event.key==='Enter')tryAdminLogin()">
+    <button class="btn-primary" style="width:100%;padding:14px;" onclick="tryAdminLogin()">Daxil ol</button>
+    <div id="adminLoginError" style="color:var(--danger);font-size:12.5px;font-weight:700;margin-top:12px;display:none;">Şifrə səhvdir</div>
+  </div>
+</div>
+
+<!-- ============ ADMIN PAGE ============ -->
+<div id="page-admin" class="page hidden">
+  <div class="topbar">
+    <button class="icon-btn" onclick="goPage('settings')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="brand" style="font-size:16px" data-i18n="admin.title">Admin Panel</div>
+    <div style="width:38px"></div>
+  </div>
+
+  <div class="admin-tabs">
+    <button class="admin-tab active" data-tab="add" onclick="switchAdminTab('add')" data-i18n="admin.tab.add">Anime əlavə et</button>
+    <button class="admin-tab" data-tab="seasons" onclick="switchAdminTab('seasons')" data-i18n="admin.tab.seasons">Sezonlar</button>
+    <button class="admin-tab" data-tab="categories" onclick="switchAdminTab('categories')" data-i18n="admin.tab.categories">Kateqoriyalar</button>
+    <button class="admin-tab" data-tab="manage" onclick="switchAdminTab('manage')" data-i18n="admin.tab.manage">İdarəetmə</button>
+    <button class="admin-tab" data-tab="system" onclick="switchAdminTab('system')" data-i18n="admin.tab.system">Sistem</button>
+  </div>
+
+  <!-- TAB: Add anime -->
+  <div id="adminTab-add" class="admin-tab-panel">
+    <div class="search-wrap">
+      <div class="search-box">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="adminSearchInput" data-i18n-placeholder="admin.searchPlaceholder" placeholder="AniList-də axtar (məs: Naruto)...">
+      </div>
+    </div>
+    <div id="adminResults" style="padding:0 18px 18px; display:flex; flex-direction:column; gap:10px;"></div>
+  </div>
+
+  <!-- TAB: Season merging -->
+  <div id="adminTab-seasons" class="admin-tab-panel hidden">
+    <div class="settings-row-sub" style="padding:0 18px 12px; font-size:12.5px;" data-i18n="admin.seasons.hint">Bir əsas anime seç, sonra ona bağlanacaq sezonları seç və təsdiqlə.</div>
+
+    <div class="settings-label" style="padding:0 18px; margin-bottom:8px;" data-i18n="admin.seasons.base">Əsas anime</div>
+    <div id="seasonBaseList" style="padding:0 18px; display:flex; flex-direction:column; gap:8px; margin-bottom:20px;"></div>
+
+    <div id="seasonPickSection" class="hidden">
+      <div id="seasonPreviewWrap" class="hidden" style="padding:0 18px 16px;">
+        <div id="seasonPreviewList"></div>
+      </div>
+      <div class="settings-label" style="padding:0 18px; margin-bottom:8px;" data-i18n="admin.seasons.pick">Sezon kimi bağlanacaq animeləri seç</div>
+      <div class="search-wrap" style="padding-top:0;">
+        <div class="search-box">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="seasonPickSearchInput" data-i18n-placeholder="admin.searchPlaceholder" placeholder="AniList-də axtar...">
+        </div>
+      </div>
+      <div id="seasonPickResults" style="padding:0 18px 90px; display:flex; flex-direction:column; gap:10px;"></div>
+    </div>
+  </div>
+
+  <!-- TAB: Categories -->
+  <div id="adminTab-categories" class="admin-tab-panel hidden">
+    <div class="settings-row-sub" style="padding:0 18px 14px; font-size:12.5px;" data-i18n="admin.cat.hint">Ana səhifədə görünəcək kateqoriyaları yarat və idarə et.</div>
+
+    <div style="padding:0 18px 16px;">
+      <button class="btn-primary" style="width:100%; padding:13px;" onclick="openCategoryCreator()">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5v14M5 12h14"/></svg>
+        <span data-i18n="admin.cat.new">Yeni kateqoriya</span>
+      </button>
+    </div>
+
+    <div id="categoryCreator" class="hidden" style="padding:0 18px 18px;">
+      <div class="settings-card" style="padding:14px; margin-bottom:14px;">
+        <div class="settings-label" style="margin-bottom:8px;" data-i18n="admin.cat.nameAz">Ad (Azərbaycanca)</div>
+        <input type="text" id="catNameAz" placeholder="məs: Ən çox baxılanlar" style="width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px 13px;color:var(--text);font-size:14px;outline:none;margin-bottom:12px;">
+        <div class="settings-label" style="margin-bottom:8px;" data-i18n="admin.cat.nameTr">Ad (Türkçe)</div>
+        <input type="text" id="catNameTr" placeholder="örn: En çok izlenenler" style="width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px 13px;color:var(--text);font-size:14px;outline:none;margin-bottom:12px;">
+        <div class="settings-label" style="margin-bottom:8px;" data-i18n="admin.cat.nameEn">Name (English)</div>
+        <input type="text" id="catNameEn" placeholder="e.g. Most watched" style="width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px 13px;color:var(--text);font-size:14px;outline:none;margin-bottom:14px;">
+        <div style="display:flex; gap:8px;">
+          <button class="btn-ghost" style="flex:1;" onclick="closeCategoryCreator()" data-i18n="admin.cat.cancel">Ləğv et</button>
+          <button class="btn-primary" style="flex:1;" onclick="createCategory()" data-i18n="admin.cat.create">Yarat</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="categoryList" style="padding:0 18px; display:flex; flex-direction:column; gap:10px;"></div>
+  </div>
+
+  <!-- TAB: Library management -->
+  <div id="adminTab-manage" class="admin-tab-panel hidden">
+    <div class="search-wrap" style="padding-top:0;">
+      <div class="search-box">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="manageSearchInput" data-i18n-placeholder="search.placeholder" placeholder="Kitabxanada axtar..." oninput="renderLibraryManage()">
+      </div>
+    </div>
+    <div id="libraryManageList" style="padding:0 18px 16px;"></div>
+  </div>
+
+  <!-- TAB: System settings -->
+  <div id="adminTab-system" class="admin-tab-panel hidden">
+    <div class="settings-group" style="margin-top:16px;">
+      <div class="settings-label" data-i18n="admin.system.access">Giriş</div>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-label" data-i18n="admin.system.logout">Admin sessiyasından çıx</div>
+            <div class="settings-row-sub" data-i18n="admin.system.logoutSub">Sonra yenidən şifrə lazım olacaq</div>
+          </div>
+          <button class="btn-ghost" style="color:var(--danger); border-color:color-mix(in srgb, var(--danger) 40%, transparent);" onclick="adminLogout()" data-i18n="admin.system.logoutBtn">Çıx</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-label" data-i18n="admin.system.data">Data</div>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-label" data-i18n="admin.system.clearCache">Tərcümə keşini təmizlə</div>
+            <div class="settings-row-sub" data-i18n="admin.system.clearCacheSub">Bütün avtomatik tərcümələr yenidən yüklənəcək</div>
+          </div>
+          <button class="btn-ghost" onclick="clearTranslationCache()" data-i18n="admin.system.clearBtn">Təmizlə</button>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-label" data-i18n="admin.system.libCount">Kitabxanada</div>
+            <div class="settings-row-sub" id="adminLibCount">0 anime</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Floating confirm bar for season multi-select -->
+<div id="seasonConfirmBar" class="confirm-bar hidden">
+  <div class="confirm-bar-text"><span id="seasonSelectedCount">0</span> <span data-i18n="admin.seasons.selected">seçildi</span></div>
+  <button class="btn-primary" onclick="confirmSeasonLink()" data-i18n="admin.seasons.confirm">Təsdiqlə</button>
+</div>
+
+<!-- ============ CATEGORY ANIME PICKER PAGE ============ -->
+<div id="page-catpicker" class="page hidden">
+  <div class="topbar">
+    <button class="icon-btn" onclick="goPage('admin')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="brand" style="font-size:15px" id="catPickerTitle">Kateqoriyaya əlavə et</div>
+    <div style="width:38px"></div>
+  </div>
+  <div class="search-wrap">
+    <div class="search-box">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="catPickerSearch" data-i18n-placeholder="search.placeholder" placeholder="Kitabxanada axtar..." oninput="renderCatPickerList()">
+    </div>
+  </div>
+  <div id="catPickerList" style="padding:0 18px 18px; display:flex; flex-direction:column; gap:10px;"></div>
+</div>
+
+
+<!-- ============ SETTINGS PAGE ============ -->
+<div id="page-settings" class="page hidden">
+  <div class="topbar">
+    <button class="icon-btn" onclick="goPage('home')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="brand" data-i18n="settings.title">Ayarlar</div>
+    <div style="width:38px"></div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-label" data-i18n="settings.account">Hesab</div>
+    <div class="settings-card">
+      <div class="settings-row">
+        <div id="accountStatus"><div class="settings-row-sub">—</div></div>
+        <button class="btn-ghost" id="accountAuthBtn" onclick="goPage('auth')">—</button>
+      </div>
+      <div class="settings-row hidden" id="usernameChangeRow" style="flex-direction:column; align-items:stretch; gap:8px;">
+        <div class="settings-row-label" data-i18n="settings.changeUsername">İstifadəçi adını dəyiş</div>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="newUsernameInput" style="flex:1;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;">
+          <button class="btn-ghost" onclick="changeUsername()" data-i18n="settings.save">Saxla</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-label" data-i18n="settings.language">Dil</div>
+    <div class="settings-card">
+      <div class="lang-options" id="langOptions"></div>
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-label" data-i18n="settings.theme">Görünüş</div>
+    <div class="settings-card">
+      <div class="theme-options" id="themeOptions"></div>
+    </div>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-label" data-i18n="settings.about">Haqqında</div>
+    <div class="settings-card">
+      <div class="settings-row"><div class="settings-row-label">Anivax</div><div class="settings-row-sub">v0.2</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BOTTOM NAV ============ -->
+<div class="bottom-nav">
+  <button class="nav-item active" data-nav="home" onclick="goPage('home')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9.5L12 3l9 6.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg>
+    <span data-i18n="nav.home">Ana səhifə</span>
+  </button>
+  <button class="nav-item" data-nav="search" onclick="goPage('search')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <span data-i18n="nav.search">Axtar</span>
+  </button>
+  <button class="nav-item" data-nav="settings" onclick="goPage('settings')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    <span data-i18n="nav.settings">Ayarlar</span>
+  </button>
+</div>
+
+<div class="toast" id="toast">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+  <span id="toastText"></span>
+</div>
+
+<!-- ============ EPISODE SOURCE EDITOR MODAL (admin only) ============ -->
+<div id="episodeSourceModal" class="hidden" style="position:fixed; inset:0; z-index:300; background:rgba(0,0,0,0.6); display:flex; align-items:flex-end;">
+  <div style="background:var(--bg); width:100%; max-height:85vh; overflow-y:auto; border-radius:20px 20px 0 0; padding:20px 18px; animation: confirmIn .25s ease;">
+    <div style="font-size:15px; font-weight:800; margin-bottom:14px;" id="epSourceTitle">—</div>
+    <div class="settings-label" style="margin-bottom:8px;" data-i18n="admin.ep.video">Video linki</div>
+    <input type="text" id="epSourceVideo" placeholder="https://..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13.5px;outline:none;margin-bottom:14px;">
+    <div class="settings-label" style="margin-bottom:8px;" data-i18n="admin.ep.subtitle">Altyazı linki (.srt/.vtt, istəyə bağlı)</div>
+    <input type="text" id="epSourceSubtitle" placeholder="https://... .srt" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13.5px;outline:none;margin-bottom:14px;">
+    <div class="settings-label" style="margin-bottom:8px;" data-i18n="admin.ep.qualities">Əlavə keyfiyyət linkləri (istəyə bağlı)</div>
+    <div style="display:flex; gap:8px; margin-bottom:8px;">
+      <input type="text" id="epSourceQ1080" placeholder="1080p https://..." style="flex:1;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;">
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom:8px;">
+      <input type="text" id="epSourceQ720" placeholder="720p https://..." style="flex:1;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;">
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom:18px;">
+      <input type="text" id="epSourceQ480" placeholder="480p https://..." style="flex:1;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;">
+    </div>
+    <div style="display:flex; gap:10px;">
+      <button class="btn-ghost" style="flex:1;" onclick="closeEpisodeSourceEditor()" data-i18n="admin.cat.cancel">Ləğv et</button>
+      <button class="btn-primary" style="flex:1;" onclick="saveEpisodeSource()" data-i18n="admin.ep.save">Saxla</button>
+    </div>
+  </div>
+</div>
+<div id="seasonSuggestModal" class="hidden" style="position:fixed; inset:0; z-index:300; background:rgba(0,0,0,0.6); display:flex; align-items:flex-end;">
+  <div style="background:var(--bg); width:100%; max-height:80vh; overflow-y:auto; border-radius:20px 20px 0 0; padding:20px 0; animation: confirmIn .25s ease;">
+    <div style="padding:0 18px 14px;">
+      <div style="font-size:15px; font-weight:800; margin-bottom:4px;" id="seasonSuggestTitle">—</div>
+      <div class="settings-row-sub" style="font-size:12px;" data-i18n="admin.suggest.hint">Bunları da avtomatik sezon kimi bağlamaq istəyirsən?</div>
+    </div>
+    <div id="seasonSuggestList" style="padding:0 18px; display:flex; flex-direction:column; gap:10px; margin-bottom:16px;"></div>
+    <div style="padding:0 18px; display:flex; gap:10px;">
+      <button class="btn-ghost" style="flex:1;" onclick="dismissSeasonSuggest()" data-i18n="admin.suggest.skip">Ötür</button>
+      <button class="btn-primary" style="flex:1;" onclick="confirmSeasonSuggest()" data-i18n="admin.suggest.link">Bağla</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+// Global safety net: if ANY uncaught error happens anywhere in this file,
+// show it directly on the page instead of leaving a silent blank screen —
+// this is how we find bugs that only show up on GitHub Pages / Cloudflare
+// and not locally, without needing remote devtools access.
+window.addEventListener('error', function(e){
+  try{
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#5a0000;color:#fff;padding:14px;font-size:12px;font-family:monospace;white-space:pre-wrap;';
+    el.textContent = 'HATA: ' + e.message + '\n' + (e.filename||'') + ':' + (e.lineno||'');
+    document.body.prepend(el);
+  }catch(err){}
+});
+
+// ================= SUPABASE CONFIG =================
+// Wrapped in try/catch: if the CDN script fails to load for any reason
+// (slow network, blocker, etc), the whole app must not go dead silent —
+// every button on the page depends on the code below this line still running.
+const SUPABASE_URL = 'https://yhyukjmotvbbrjmvcrof.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_9QCf-9pzAlJk3pWIHeEbTw_H8cpd3hG';
+let sb = null;
+function initSupabase(){
+  try{
+    if(window.supabase && window.supabase.createClient){
+      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      return true;
+    }
+  }catch(e){ console.error('Supabase init failed:', e); }
+  return false;
+}
+initSupabase();
+// Tiny helper so every sb.from(...) call site doesn't need its own null-check.
+function sbReady(){ return !!sb; }
+let currentUser = null; // set on auth state change
+// ================= I18N =================
+const I18N = {
+  az: {
+    "hero.eyebrow":"Anivax-a xoş gəldin","hero.title":"Kitabxanana ilk animeni əlavə et","hero.addBtn":"Anime əlavə et",
+    "row.continue":"İzləməyə davam et","row.continueEmpty":"Hələ izlədiyin bir bölüm yoxdur",
+    "row.library":"Kitabxana","row.all":"hamısı","row.libraryEmpty":"Kitabxana boşdur. Admin paneldən anime əlavə et.",
+    "search.title":"Axtarış","search.placeholder":"Kitabxanada axtar...",
+    "library.title":"Kitabxana","detail.watch":"İzlə","detail.episodes":"Bölümlər",
+    "player.title":"Oynadıcı","player.noSource":"Video mənbəyi hələ bağlanmayıb.<br>Öz videonu əlavə edəndə burda oynayacaq.",
+    "admin.title":"Admin Panel","admin.searchPlaceholder":"AniList-də axtar (məs: Naruto)...",
+    "admin.tab.add":"Anime əlavə et","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kateqoriyalar","admin.tab.manage":"İdarəetmə","admin.tab.system":"Sistem",
+    "admin.cat.hint":"Ana səhifədə görünəcək kateqoriyaları yarat və idarə et.","admin.cat.new":"Yeni kateqoriya",
+    "admin.cat.nameAz":"Ad (Azərbaycanca)","admin.cat.nameTr":"Ad (Türkçe)","admin.cat.nameEn":"Name (English)",
+    "admin.cat.cancel":"Ləğv et","admin.cat.create":"Yarat",
+    "admin.suggest.hint":"Bunları da avtomatik sezon kimi bağlamaq istəyirsən?","admin.suggest.skip":"Ötür","admin.suggest.link":"Bağla",
+    "admin.ep.video":"Video linki","admin.ep.subtitle":"Altyazı linki (.srt/.vtt, istəyə bağlı)","admin.ep.save":"Saxla","admin.ep.qualities":"Əlavə keyfiyyət linkləri (istəyə bağlı)",
+    "player.quality":"Keyfiyyət","player.speed":"Sürət","player.settingsTitle":"Ayarlar",
+    "admin.seasons.hint":"Bir əsas anime seç, sonra ona bağlanacaq sezonları seç və təsdiqlə.",
+    "admin.seasons.base":"Əsas anime","admin.seasons.pick":"Sezon kimi bağlanacaq animeləri seç",
+    "admin.seasons.selected":"seçildi","admin.seasons.confirm":"Təsdiqlə",
+    "admin.system.access":"Giriş","admin.system.logout":"Admin sessiyasından çıx","admin.system.logoutSub":"Sonra yenidən şifrə lazım olacaq","admin.system.logoutBtn":"Çıx",
+    "admin.system.data":"Data","admin.system.clearCache":"Tərcümə keşini təmizlə","admin.system.clearCacheSub":"Bütün avtomatik tərcümələr yenidən yüklənəcək","admin.system.clearBtn":"Təmizlə",
+    "admin.system.libCount":"Kitabxanada",
+    "settings.title":"Ayarlar","settings.admin":"Admin Panel","settings.adminSub":"Anime əlavə et / idarə et",
+    "settings.language":"Dil","settings.theme":"Görünüş","settings.playback":"Oxutma","settings.account":"Hesab",
+    "settings.changeUsername":"İstifadəçi adını dəyiş","settings.save":"Saxla",
+    "auth.title":"Hesab","auth.username":"İstifadəçi adı","auth.email":"E-poçt","auth.password":"Şifrə",
+    "auth.signup":"Hesab yarat","auth.toggleToSignin":"Artıq hesabın var? Giriş et",
+    "settings.autoplay":"Avtomatik növbəti bölüm","settings.autoplaySub":"Bölüm bitəndə növbətini başlat",
+    "settings.skipIntro":"İntro-nu ötür","settings.skipIntroSub":"Açılış mahnısını avtomatik keç",
+    "settings.notif":"Bildirişlər","settings.newEp":"Yeni bölüm","settings.newEpSub":"Kitabxanana yeni bölüm əlavə olunanda bildir",
+    "settings.about":"Haqqında","nav.home":"Ana səhifə","nav.search":"Axtar","nav.settings":"Ayarlar",
+    "toast.added":"Kitabxanaya əlavə olundu","toast.removed":"Kitabxanadan silindi","empty.noResults":"Nəticə tapılmadı",
+    "admin.eps":"bölüm"
+  },
+  tr: {
+    "hero.eyebrow":"Anivax'a hoş geldin","hero.title":"Kitaplığına ilk animeni ekle","hero.addBtn":"Anime ekle",
+    "row.continue":"İzlemeye devam et","row.continueEmpty":"Henüz izlediğin bir bölüm yok",
+    "row.library":"Kitaplık","row.all":"tümü","row.libraryEmpty":"Kitaplık boş. Admin panelden anime ekle.",
+    "search.title":"Ara","search.placeholder":"Kitaplıkta ara...",
+    "library.title":"Kitaplık","detail.watch":"İzle","detail.episodes":"Bölümler",
+    "player.title":"Oynatıcı","player.noSource":"Video kaynağı henüz bağlanmadı.<br>Kendi videonu ekleyince burada oynayacak.",
+    "admin.title":"Admin Panel","admin.searchPlaceholder":"AniList'te ara (örn: Naruto)...",
+    "admin.tab.add":"Anime ekle","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kategoriler","admin.tab.manage":"Yönetim","admin.tab.system":"Sistem",
+    "admin.cat.hint":"Ana sayfada görünecek kategorileri oluştur ve yönet.","admin.cat.new":"Yeni kategori",
+    "admin.cat.nameAz":"İsim (Azərbaycanca)","admin.cat.nameTr":"İsim (Türkçe)","admin.cat.nameEn":"İsim (English)",
+    "admin.cat.cancel":"Vazgeç","admin.cat.create":"Oluştur",
+    "admin.suggest.hint":"Bunları da otomatik sezon olarak bağlamak ister misin?","admin.suggest.skip":"Geç","admin.suggest.link":"Bağla",
+    "admin.ep.video":"Video linki","admin.ep.subtitle":"Altyazı linki (.srt/.vtt, opsiyonel)","admin.ep.save":"Kaydet","admin.ep.qualities":"Ek kalite linkleri (opsiyonel)",
+    "player.quality":"Kalite","player.speed":"Hız","player.settingsTitle":"Ayarlar",
+    "admin.seasons.hint":"Bir ana anime seç, sonra ona bağlanacak sezonları seç ve onayla.",
+    "admin.seasons.base":"Ana anime","admin.seasons.pick":"Sezon olarak bağlanacak animeleri seç",
+    "admin.seasons.selected":"seçildi","admin.seasons.confirm":"Onayla",
+    "admin.system.access":"Giriş","admin.system.logout":"Admin oturumundan çık","admin.system.logoutSub":"Sonra tekrar şifre gerekecek","admin.system.logoutBtn":"Çık",
+    "admin.system.data":"Veri","admin.system.clearCache":"Çeviri önbelleğini temizle","admin.system.clearCacheSub":"Tüm otomatik çeviriler yeniden yüklenecek","admin.system.clearBtn":"Temizle",
+    "admin.system.libCount":"Kütüphanede",
+    "settings.title":"Ayarlar","settings.admin":"Admin Panel","settings.adminSub":"Anime ekle / yönet",
+    "settings.language":"Dil","settings.theme":"Görünüm","settings.playback":"Oynatma","settings.account":"Hesap",
+    "settings.changeUsername":"Kullanıcı adını değiştir","settings.save":"Kaydet",
+    "auth.title":"Hesap","auth.username":"Kullanıcı adı","auth.email":"E-posta","auth.password":"Şifre",
+    "auth.signup":"Hesap oluştur","auth.toggleToSignin":"Zaten hesabın var mı? Giriş yap",
+    "settings.autoplay":"Otomatik sonraki bölüm","settings.autoplaySub":"Bölüm bitince sonrakini başlat",
+    "settings.skipIntro":"İntroyu atla","settings.skipIntroSub":"Açılış şarkısını otomatik geç",
+    "settings.notif":"Bildirimler","settings.newEp":"Yeni bölüm","settings.newEpSub":"Kitaplığına yeni bölüm eklenince bildir",
+    "settings.about":"Hakkında","nav.home":"Ana sayfa","nav.search":"Ara","nav.settings":"Ayarlar",
+    "toast.added":"Kitaplığa eklendi","toast.removed":"Kitaplıktan silindi","empty.noResults":"Sonuç bulunamadı",
+    "admin.eps":"bölüm"
+  },
+  en: {
+    "hero.eyebrow":"Welcome to Anivax","hero.title":"Add your first anime to the library","hero.addBtn":"Add anime",
+    "row.continue":"Continue watching","row.continueEmpty":"You haven't watched any episodes yet",
+    "row.library":"Library","row.all":"see all","row.libraryEmpty":"Library is empty. Add anime from the admin panel.",
+    "search.title":"Search","search.placeholder":"Search library...",
+    "library.title":"Library","detail.watch":"Watch","detail.episodes":"Episodes",
+    "player.title":"Player","player.noSource":"Video source not connected yet.<br>It will play here once you add your own video.",
+    "admin.title":"Admin Panel","admin.searchPlaceholder":"Search AniList (e.g. Naruto)...",
+    "admin.tab.add":"Add anime","admin.tab.seasons":"Seasons","admin.tab.categories":"Categories","admin.tab.manage":"Manage","admin.tab.system":"System",
+    "admin.cat.hint":"Create and manage categories shown on the home page.","admin.cat.new":"New category",
+    "admin.cat.nameAz":"Name (Azərbaycanca)","admin.cat.nameTr":"Name (Türkçe)","admin.cat.nameEn":"Name (English)",
+    "admin.cat.cancel":"Cancel","admin.cat.create":"Create",
+    "admin.suggest.hint":"Also link these as seasons automatically?","admin.suggest.skip":"Skip","admin.suggest.link":"Link",
+    "admin.ep.video":"Video link","admin.ep.subtitle":"Subtitle link (.srt/.vtt, optional)","admin.ep.save":"Save","admin.ep.qualities":"Additional quality links (optional)",
+    "player.quality":"Quality","player.speed":"Speed","player.settingsTitle":"Settings",
+    "admin.seasons.hint":"Pick a base anime, then pick the seasons to link to it and confirm.",
+    "admin.seasons.base":"Base anime","admin.seasons.pick":"Pick anime to link as seasons",
+    "admin.seasons.selected":"selected","admin.seasons.confirm":"Confirm",
+    "admin.system.access":"Access","admin.system.logout":"Log out of admin session","admin.system.logoutSub":"You'll need the password again next time","admin.system.logoutBtn":"Log out",
+    "admin.system.data":"Data","admin.system.clearCache":"Clear translation cache","admin.system.clearCacheSub":"All auto-translations will be re-fetched","admin.system.clearBtn":"Clear",
+    "admin.system.libCount":"In library",
+    "settings.title":"Settings","settings.admin":"Admin Panel","settings.adminSub":"Add / manage anime",
+    "settings.language":"Language","settings.theme":"Appearance","settings.playback":"Playback","settings.account":"Account",
+    "settings.changeUsername":"Change username","settings.save":"Save",
+    "auth.title":"Account","auth.username":"Username","auth.email":"Email","auth.password":"Password",
+    "auth.signup":"Create account","auth.toggleToSignin":"Already have an account? Sign in",
+    "settings.autoplay":"Autoplay next episode","settings.autoplaySub":"Start the next episode automatically",
+    "settings.skipIntro":"Skip intro","settings.skipIntroSub":"Automatically skip the opening song",
+    "settings.notif":"Notifications","settings.newEp":"New episode","settings.newEpSub":"Notify when a new episode is added to your library",
+    "settings.about":"About","nav.home":"Home","nav.search":"Search","nav.settings":"Settings",
+    "toast.added":"Added to library","toast.removed":"Removed from library","empty.noResults":"No results found",
+    "admin.eps":"episodes"
+  }
+};
+
+let state = {
+  lang: 'az',
+  theme: 'dark',
+  autoplay: false,
+  skipIntro: false,
+  newEpNotif: true,
+  library: [],
+  categories: [],
+  watchHistory: [],
+  notifications: [] // [{id, animeId, animeTitle, episode, timestamp, read}]
+};
+
+// ================= ADMIN AUTH =================
+const ADMIN_PASSWORD = "Anv7#kQm2xZ9!wR";
+let isAdmin = false; // resets on every fresh load — must re-enter password each session
+let logoTapCount = 0;
+let logoTapTimer = null;
+
+function handleLogoTap(){
+  logoTapCount++;
+  clearTimeout(logoTapTimer);
+  logoTapTimer = setTimeout(()=>{ logoTapCount = 0; }, 1500);
+  if(logoTapCount >= 7){
+    logoTapCount = 0;
+    if(isAdmin){ goPage('admin'); }
+    else { goPage('adminlogin'); }
+  }
+}
+
+function tryAdminLogin(){
+  const val = document.getElementById('adminPassInput').value;
+  if(val === ADMIN_PASSWORD){
+    isAdmin = true;
+    document.getElementById('adminPassInput').value = '';
+    document.getElementById('adminLoginError').style.display = 'none';
+    goPage('admin');
+  } else {
+    document.getElementById('adminLoginError').style.display = 'block';
+  }
+}
+
+function adminLogout(){
+  isAdmin = false;
+  showToast(state.lang==='en' ? 'Logged out' : (state.lang==='tr' ? 'Çıkış yapıldı' : 'Çıxış edildi'));
+  goPage('home');
+}
+
+// ================= USER ACCOUNTS (Supabase Auth) =================
+async function refreshCurrentUser(){
+  try{
+    const result = await withTimeout(sb.auth.getUser(), 4000);
+    currentUser = result && result.data ? result.data.user : null;
+  }catch(e){ currentUser = null; }
+  updateAccountUI();
+}
+
+function updateAccountUI(){
+  const wrap = document.getElementById('accountStatus');
+  if(!wrap) return;
+  const renameWrap = document.getElementById('usernameChangeRow');
+  if(currentUser){
+    wrap.innerHTML = `
+      <div class="settings-row-label">${currentUser.user_metadata?.username || currentUser.email}</div>
+      <div class="settings-row-sub">${currentUser.email}</div>`;
+    document.getElementById('accountAuthBtn').textContent = state.lang==='en'?'Sign out':(state.lang==='tr'?'Çıkış yap':'Çıxış et');
+    document.getElementById('accountAuthBtn').onclick = signOut;
+    if(renameWrap){
+      renameWrap.classList.remove('hidden');
+      document.getElementById('newUsernameInput').value = currentUser.user_metadata?.username || '';
+    }
+  } else {
+    wrap.innerHTML = `<div class="settings-row-sub">${state.lang==='en'?'Not signed in':(state.lang==='tr'?'Giriş yapılmadı':'Giriş edilməyib')}</div>`;
+    document.getElementById('accountAuthBtn').textContent = state.lang==='en'?'Sign in':(state.lang==='tr'?'Giriş yap':'Giriş et');
+    document.getElementById('accountAuthBtn').onclick = ()=> goPage('auth');
+    if(renameWrap) renameWrap.classList.add('hidden');
+  }
+}
+
+async function changeUsername(){
+  if(!currentUser) return;
+  const newName = document.getElementById('newUsernameInput').value.trim();
+  if(!newName){
+    showToast(state.lang==='en'?'Enter a username':(state.lang==='tr'?'Bir kullanıcı adı gir':'İstifadəçi adı daxil et'));
+    return;
+  }
+  try{
+    await sb.auth.updateUser({ data: { username: newName } });
+    await sb.from('profiles').update({ username: newName, display_name: newName }).eq('id', currentUser.id);
+    await refreshCurrentUser();
+    showToast(state.lang==='en'?'Username updated':(state.lang==='tr'?'Kullanıcı adı güncellendi':'İstifadəçi adı yeniləndi'));
+  }catch(e){
+    showToast(state.lang==='en'?'Could not update username':(state.lang==='tr'?'Kullanıcı adı güncellenemedi':'İstifadəçi adı yenilənmədi'));
+  }
+}
+
+async function signUp(){
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const username = document.getElementById('authUsername').value.trim();
+  if(!email || !password || !username){
+    document.getElementById('authError').textContent = state.lang==='en'?'Fill in all fields':(state.lang==='tr'?'Tüm alanları doldur':'Bütün sahələri doldur');
+    document.getElementById('authError').style.display = 'block';
+    return;
+  }
+  const { data, error } = await sb.auth.signUp({ email, password, options: { data: { username } } });
+  if(error){
+    document.getElementById('authError').textContent = error.message;
+    document.getElementById('authError').style.display = 'block';
+    return;
+  }
+  if(data.user){
+    await sb.from('profiles').upsert({ id: data.user.id, username, display_name: username });
+  }
+  await refreshCurrentUser();
+  await loadWatchHistory();
+  renderHome();
+
+  // If email confirmation is required, Supabase returns a user but no active
+  // session yet — show a clear "check your inbox" message instead of implying
+  // the account is already usable.
+  const needsConfirmation = data.user && !data.session;
+  if(needsConfirmation){
+    showToast(state.lang==='en' ? 'Confirmation email sent — check your inbox' :
+      (state.lang==='tr' ? 'Onay e-postası gönderildi — gelen kutunu kontrol et' : 'Təsdiq e-poçtu göndərildi — poçt qutunu yoxla'));
+  } else {
+    showToast(state.lang==='en'?'Account created':(state.lang==='tr'?'Hesap oluşturuldu':'Hesab yaradıldı'));
+  }
+  goPage('settings');
+}
+
+async function signIn(){
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if(error){
+    document.getElementById('authError').textContent = error.message;
+    document.getElementById('authError').style.display = 'block';
+    return;
+  }
+  await refreshCurrentUser();
+  await loadWatchHistory();
+  renderHome();
+  showToast(state.lang==='en'?'Signed in':(state.lang==='tr'?'Giriş yapıldı':'Giriş edildi'));
+  goPage('settings');
+}
+
+async function signOut(){
+  await sb.auth.signOut();
+  currentUser = null;
+  state.watchHistory = [];
+  updateAccountUI();
+  renderHome();
+  showToast(state.lang==='en'?'Signed out':(state.lang==='tr'?'Çıkış yapıldı':'Çıxış edildi'));
+}
+
+function toggleAuthMode(){
+  const isSignUp = document.getElementById('authUsernameRow').classList.contains('hidden');
+  document.getElementById('authUsernameRow').classList.toggle('hidden', !isSignUp);
+  document.getElementById('authSubmitBtn').textContent = isSignUp
+    ? (state.lang==='en'?'Create account':(state.lang==='tr'?'Hesap oluştur':'Hesab yarat'))
+    : (state.lang==='en'?'Sign in':(state.lang==='tr'?'Giriş yap':'Giriş et'));
+  document.getElementById('authSubmitBtn').onclick = isSignUp ? signUp : signIn;
+  document.getElementById('authToggleText').textContent = isSignUp
+    ? (state.lang==='en'?'Already have an account? Sign in':(state.lang==='tr'?'Zaten hesabın var mı? Giriş yap':'Artıq hesabın var? Giriş et'))
+    : (state.lang==='en'?"Don't have an account? Sign up":(state.lang==='tr'?'Hesabın yok mu? Kayıt ol':'Hesabın yoxdur? Qeydiyyatdan keç'));
+}
+
+function requireAdmin(){
+  if(!isAdmin){
+    showToast(state.lang==='en' ? 'Admin access required' : (state.lang==='tr' ? 'Yönetici yetkisi gerekli' : 'İdarəçi girişi tələb olunur'));
+    return false;
+  }
+  return true;
+}
+
+function t(key){
+  return (I18N[state.lang] && I18N[state.lang][key]) || I18N.az[key] || key;
+}
+
+function applyI18n(){
+  document.documentElement.lang = state.lang;
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    el.innerHTML = t(el.getAttribute('data-i18n'));
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el=>{
+    el.placeholder = t(el.getAttribute('data-i18n-placeholder'));
+  });
+  renderLangOptions();
+  renderThemeOptions();
+}
+
+function applyTheme(){
+  document.body.setAttribute('data-theme', state.theme);
+}
+
+// ================= STORAGE PERSISTENCE =================
+// Personal prefs (language/theme) stay in localStorage — no need to round-trip
+// to the database for things that are purely per-device.
+// Wraps any Supabase promise with a hard timeout — a misconfigured Auth/Site URL
+// can make requests hang indefinitely instead of erroring, which would otherwise
+// freeze the whole app at that line forever.
+function withTimeout(promise, ms){
+  return Promise.race([
+    promise,
+    new Promise((_, reject)=> setTimeout(()=> reject(new Error('request timeout')), ms))
+  ]);
+}
+
+async function loadState(){
+  try{
+    const saved = JSON.parse(localStorage.getItem('anivax_settings') || '{}');
+    state = {...state, ...saved};
+  }catch(e){}
+
+  try{
+    const { data, error } = await withTimeout(sb.from('library').select('id, data').order('created_at'), 5000);
+    if(!error && data) state.library = data.map(row => row.data);
+  }catch(e){ console.error('loadState: library fetch failed', e); }
+
+  try{
+    const { data, error } = await withTimeout(sb.from('categories').select('*').order('created_at'), 5000);
+    if(!error && data) state.categories = data.map(row => ({ id: row.id, name: row.name, animeIds: row.anime_ids || [] }));
+  }catch(e){ console.error('loadState: categories fetch failed', e); }
+
+  try{ await refreshCurrentUser(); }catch(e){ console.error('loadState: refreshCurrentUser failed', e); }
+  try{ await loadWatchHistory(); }catch(e){ console.error('loadState: loadWatchHistory failed', e); }
+
+  try{ applyI18n(); }catch(e){ console.error('loadState: applyI18n failed', e); }
+  try{ applyTheme(); }catch(e){ console.error('loadState: applyTheme failed', e); }
+  try{ renderHome(); }catch(e){ console.error('loadState: renderHome failed', e); }
+}
+
+function saveSettings(){
+  // Personal prefs only — device-local, not shared across users.
+  try{ localStorage.setItem('anivax_settings', JSON.stringify({
+    lang: state.lang, theme: state.theme, autoplay: state.autoplay, skipIntro: state.skipIntro
+  })); }catch(e){}
+}
+
+async function saveLibraryEntry(media){
+  try{ await sb.from('library').upsert({ id: media.id, data: media, updated_at: new Date().toISOString() }); }catch(e){}
+}
+async function deleteLibraryEntry(id){
+  try{ await sb.from('library').delete().eq('id', id); }catch(e){}
+}
+// Persists the whole in-memory library — used after edits that touch nested
+// data (seasons, episodeSources) where we already have the target object.
+async function saveLibrary(){
+  try{
+    for(const m of state.library){
+      await sb.from('library').upsert({ id: m.id, data: m, updated_at: new Date().toISOString() });
+    }
+  }catch(e){}
+}
+async function saveCategories(){
+  try{
+    for(const c of state.categories){
+      await sb.from('categories').upsert({ id: c.id, name: c.name, anime_ids: c.animeIds || [] });
+    }
+  }catch(e){}
+}
+async function saveHistory(progressSeconds){
+  if(!currentUser) return; // history requires being signed in
+  try{
+    const latest = state.watchHistory[0];
+    if(!latest) return;
+    await sb.from('watch_history').upsert({
+      user_id: currentUser.id, anime_id: latest.animeId, base_id: latest.baseId,
+      episode: latest.episode, progress_seconds: progressSeconds ?? (latest.progressSeconds || 0),
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id,anime_id' });
+  }catch(e){}
+}
+async function loadWatchHistory(){
+  if(!currentUser){ state.watchHistory = []; return; }
+  try{
+    const { data, error } = await sb.from('watch_history')
+      .select('*').eq('user_id', currentUser.id).order('updated_at', {ascending:false}).limit(20);
+    if(!error && data){
+      state.watchHistory = data.map(r => ({
+        animeId: r.anime_id, baseId: r.base_id, episode: r.episode,
+        progressSeconds: r.progress_seconds || 0, timestamp: new Date(r.updated_at).getTime()
+      }));
+    }
+  }catch(e){}
+}
+
+// ================= SETTINGS UI =================
+const LANGS = [ {code:'az', label:'Azərbaycanca'}, {code:'tr', label:'Türkçe'}, {code:'en', label:'English'} ];
+const THEMES = [ {code:'dark', label:'Tünd', swatch:'#0A0C12'}, {code:'light', label:'Açıq', swatch:'#F7F5F0'}, {code:'midnight', label:'Gecəyarı', swatch:'#05060A'} ];
+
+function renderLangOptions(){
+  document.getElementById('langOptions').innerHTML = LANGS.map(l=>`
+    <button class="option-pill ${state.lang===l.code?'active':''}" onclick="setLang('${l.code}')">${l.label}</button>
+  `).join('');
+}
+function renderThemeOptions(){
+  document.getElementById('themeOptions').innerHTML = THEMES.map(th=>`
+    <button class="option-pill ${state.theme===th.code?'active':''}" onclick="setTheme('${th.code}')">
+      <span class="theme-swatch" style="background:${th.swatch}"></span>${th.label}
+    </button>
+  `).join('');
+}
+function setLang(code){ state.lang = code; applyI18n(); saveSettings(); renderHome(); }
+function setTheme(code){ state.theme = code; applyTheme(); renderThemeOptions(); saveSettings(); }
+function toggleSetting(key, el){
+  state[key] = !state[key];
+  el.classList.toggle('on', state[key]);
+  saveSettings();
+}
+
+// init toggle visuals (nothing on the main settings page needs a toggle right now;
+// autoplay/skipIntro are initialized separately when the player opens)
+function initToggles(){}
+function initPlayerToggles(){
+  const ap = document.getElementById('toggleAutoplayPlayer');
+  const si = document.getElementById('toggleSkipIntroPlayer');
+  if(ap) ap.classList.toggle('on', state.autoplay);
+  if(si) si.classList.toggle('on', state.skipIntro);
+}
+
+// ================= TOAST =================
+let toastTimer;
+function showToast(msg){
+  const el = document.getElementById('toast');
+  document.getElementById('toastText').textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=> el.classList.remove('show'), 2200);
+}
+
+// ================= ANILIST API =================
+async function anilistSearch(query){
+  const gql = `
+    query ($search: String) {
+      Page(page:1, perPage:12){
+        media(search:$search, type: ANIME, sort: POPULARITY_DESC){
+          id
+          title{ romaji english native }
+          coverImage{ large color }
+          bannerImage
+          description(asHtml:false)
+          episodes
+          genres
+          seasonYear
+          averageScore
+          status
+          studios(isMain:true){ nodes{ name } }
+          nextAiringEpisode{ episode }
+          relations{
+            edges{
+              relationType
+              node{ id type format title{ romaji english native } coverImage{ large } episodes seasonYear }
+            }
+          }
+        }
+      }
+    }`;
+  const res = await fetch('https://graphql.anilist.co', {
+    method:'POST',
+    headers:{'Content-Type':'application/json', 'Accept':'application/json'},
+    body: JSON.stringify({query: gql, variables:{search: query}})
+  });
+  const json = await res.json();
+  return json.data && json.data.Page ? json.data.Page.media : [];
+}
+
+// Fetches one anime by its exact AniList id — used when we already know the id
+// (e.g. from a relations edge) and don't want to risk a title-search mismatch.
+async function anilistById(id){
+  const gql = `
+    query ($id: Int) {
+      Media(id:$id, type: ANIME){
+        id title{ romaji english native } coverImage{ large color } bannerImage
+        description(asHtml:false) episodes genres seasonYear averageScore status studios(isMain:true){ nodes{ name } }
+        nextAiringEpisode{ episode }
+        relations{ edges{ relationType node{ id type format title{ romaji english native } coverImage{ large } episodes seasonYear } } }
+      }
+    }`;
+  const res = await fetch('https://graphql.anilist.co', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({query: gql, variables:{id}})
+  });
+  const json = await res.json();
+  return json.data ? json.data.Media : null;
+}
+
+async function anilistTrending(){
+  const gql = `
+    query {
+      Page(page:1, perPage:12){
+        media(type: ANIME, sort: TRENDING_DESC){
+          id title{ romaji english native } coverImage{ large color } bannerImage
+          description(asHtml:false) episodes genres seasonYear averageScore status studios(isMain:true){ nodes{ name } }
+          nextAiringEpisode{ episode }
+          relations{
+            edges{
+              relationType
+              node{ id type format title{ romaji english native } coverImage{ large } episodes seasonYear }
+            }
+          }
+        }
+      }
+    }`;
+  const res = await fetch('https://graphql.anilist.co', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({query: gql})
+  });
+  const json = await res.json();
+  return json.data && json.data.Page ? json.data.Page.media : [];
+}
+
+function stripHtml(html){
+  if(!html) return '';
+  const d = document.createElement('div'); d.innerHTML = html;
+  return d.textContent || d.innerText || '';
+}
+
+// ================= AUTO TRANSLATION (MyMemory, free, no key) =================
+let translationCache = {};
+function loadTranslationCache(){
+  try{ translationCache = JSON.parse(localStorage.getItem('anivax_translations') || '{}'); }catch(e){}
+}
+function saveTranslationCache(){
+  try{ localStorage.setItem('anivax_translations', JSON.stringify(translationCache)); }catch(e){}
+}
+function clearTranslationCache(){
+  if(!requireAdmin()) return;
+  translationCache = {};
+  saveTranslationCache();
+  showToast(state.lang==='en' ? 'Translation cache cleared' : (state.lang==='tr' ? 'Önbellek temizlendi' : 'Keş təmizləndi'));
+}
+
+async function translateText(text, targetLang){
+  if(!text) return '';
+  if(targetLang === 'en') return text;
+  const cacheKey = targetLang + ':' + text.slice(0,80) + ':' + text.length;
+  if(translationCache[cacheKey]) return translationCache[cacheKey];
+
+  const langMap = { az: 'az', tr: 'tr' };
+  const target = langMap[targetLang] || 'en';
+  const chunks = [];
+  let remaining = text;
+  while(remaining.length > 0){
+    chunks.push(remaining.slice(0, 480));
+    remaining = remaining.slice(480);
+  }
+  try{
+    const translatedChunks = await Promise.all(chunks.map(async chunk=>{
+      const params = new URLSearchParams({ q: chunk, langpair: `en|${target}` });
+      const res = await fetch(`https://api.mymemory.translated.net/get?${params}`);
+      const data = await res.json();
+      return (data.responseData && data.responseData.translatedText) ? data.responseData.translatedText : chunk;
+    }));
+    const result = translatedChunks.join('');
+    translationCache[cacheKey] = result;
+    saveTranslationCache();
+    return result;
+  }catch(e){
+    return text;
+  }
+}
+
+// ================= ADMIN SEARCH (Add tab) =================
+let adminDebounce;
+document.addEventListener('input', (e)=>{
+  if(e.target.id === 'adminSearchInput'){
+    clearTimeout(adminDebounce);
+    const q = e.target.value.trim();
+    if(!q){ renderAdminTrending(); return; }
+    adminDebounce = setTimeout(()=> runAdminSearch(q), 400);
+  }
+  if(e.target.id === 'seasonPickSearchInput'){
+    clearTimeout(seasonPickDebounce);
+    const q = e.target.value.trim();
+    if(!q){ renderSeasonPickTrending(); return; }
+    seasonPickDebounce = setTimeout(()=> runSeasonPickSearch(q), 400);
+  }
+});
+
+async function renderAdminTrending(){
+  const wrap = document.getElementById('adminResults');
+  wrap.innerHTML = `<div class="loading-row">⟳ Yüklənir...</div>`;
+  try{
+    const results = await anilistTrending();
+    renderAdminResults(results);
+  }catch(e){
+    wrap.innerHTML = `<div class="empty-row">Bağlantı xətası. Yenidən cəhd et.</div>`;
+  }
+}
+
+async function runAdminSearch(q){
+  const wrap = document.getElementById('adminResults');
+  wrap.innerHTML = `<div class="loading-row">⟳ Axtarılır...</div>`;
+  try{
+    const results = await anilistSearch(q);
+    renderAdminResults(results);
+  }catch(e){
+    wrap.innerHTML = `<div class="empty-row">Bağlantı xətası. Yenidən cəhd et.</div>`;
+  }
+}
+
+function renderAdminResults(results){
+  const wrap = document.getElementById('adminResults');
+  if(!results || results.length===0){
+    wrap.innerHTML = `<div class="empty-row">${t('empty.noResults')}</div>`;
+    return;
+  }
+  wrap.innerHTML = results.map(m=>{
+    const title = m.title.english || m.title.romaji || m.title.native;
+    const inLib = state.library.some(x=>x.id===m.id);
+    const cover = m.coverImage ? m.coverImage.large : '';
+    return `
+    <div class="al-result">
+      <div class="al-poster" style="background-image:url('${cover}')"></div>
+      <div class="al-info">
+        <div class="al-title">${title}</div>
+        <div class="al-meta">${m.seasonYear||'—'} · ${m.episodes||'?'} ${t('admin.eps')} · ${(m.genres||[]).slice(0,2).join(', ')}</div>
+      </div>
+      <button class="al-add-btn ${inLib?'added':''}" onclick='toggleLibrary(${JSON.stringify(m).replace(/'/g,"&apos;")})'>
+        ${inLib ? `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+                : `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>`}
+      </button>
+    </div>`;
+  }).join('');
+}
+
+// ================= ADMIN TABS =================
+function switchAdminTab(tab){
+  document.querySelectorAll('.admin-tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
+  document.querySelectorAll('.admin-tab-panel').forEach(p=>p.classList.add('hidden'));
+  document.getElementById('adminTab-'+tab).classList.remove('hidden');
+  hideSeasonConfirmBar();
+
+  if(tab==='add' && document.getElementById('adminSearchInput').value.trim()==='') renderAdminTrending();
+  if(tab==='seasons') renderSeasonBaseList();
+  if(tab==='categories') renderCategoryList();
+  if(tab==='manage') renderLibraryManage();
+  if(tab==='system') updateSystemTab();
+}
+
+// ================= CATEGORIES =================
+function openCategoryCreator(){
+  document.getElementById('categoryCreator').classList.remove('hidden');
+  document.getElementById('catNameAz').value = '';
+  document.getElementById('catNameTr').value = '';
+  document.getElementById('catNameEn').value = '';
+}
+function closeCategoryCreator(){
+  document.getElementById('categoryCreator').classList.add('hidden');
+}
+function createCategory(){
+  if(!requireAdmin()) return;
+  const az = document.getElementById('catNameAz').value.trim();
+  const tr = document.getElementById('catNameTr').value.trim();
+  const en = document.getElementById('catNameEn').value.trim();
+  if(!az && !tr && !en){
+    showToast(state.lang==='en' ? 'Enter at least one name' : (state.lang==='tr' ? 'En az bir isim gir' : 'Ən azı bir ad daxil et'));
+    return;
+  }
+  const cat = {
+    id: 'cat_' + Date.now(),
+    name: { az: az || tr || en, tr: tr || az || en, en: en || az || tr },
+    animeIds: []
+  };
+  state.categories.push(cat);
+  saveCategories();
+  closeCategoryCreator();
+  renderCategoryList();
+  showToast(state.lang==='en' ? 'Category created' : (state.lang==='tr' ? 'Kategori oluşturuldu' : 'Kateqoriya yaradıldı'));
+}
+
+function deleteCategory(catId){
+  if(!requireAdmin()) return;
+  state.categories = state.categories.filter(c=>c.id!==catId);
+  saveCategories();
+  renderCategoryList();
+  renderHome();
+}
+
+function catAnimeThumb(id){
+  const m = state.library.find(x=>x.id===id) || state.library.flatMap(x=>x.seasons||[]).find(s=>s.id===id);
+  return m;
+}
+
+function renderCategoryList(){
+  const wrap = document.getElementById('categoryList');
+  if(state.categories.length===0){
+    wrap.innerHTML = `<div class="empty-row">${state.lang==='en'?'No categories yet. Create one above.':(state.lang==='tr'?'Henüz kategori yok. Yukarıdan oluştur.':'Hələ kateqoriya yoxdur. Yuxarıdan yarat.')}</div>`;
+    return;
+  }
+  wrap.innerHTML = state.categories.map(cat=>{
+    const chips = (cat.animeIds||[]).map(id=>{
+      const m = catAnimeThumb(id);
+      if(!m) return '';
+      const title = m.title.english || m.title.romaji;
+      const cover = m.coverImage ? m.coverImage.large : '';
+      return `<div class="cat-chip"><img src="${cover}">${title.slice(0,16)}${title.length>16?'…':''}<span class="cat-chip-remove" onclick="removeCatAnime('${cat.id}', ${id})"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></div>`;
+    }).join('');
+    return `
+    <div class="cat-card">
+      <div class="cat-card-head">
+        <div>
+          <div class="cat-card-title">${cat.name[state.lang] || cat.name.az}</div>
+          <div class="cat-card-count">${(cat.animeIds||[]).length} anime</div>
+        </div>
+        <div class="cat-card-actions">
+          <button class="cat-icon-btn" onclick="openCatPicker('${cat.id}')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button class="cat-icon-btn" style="color:var(--danger);" onclick="deleteCategory('${cat.id}')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>
+          </button>
+        </div>
+      </div>
+      ${chips ? `<div class="cat-anime-chips">${chips}</div>` : `<div class="cat-anime-chips"><span style="color:var(--text-dim); font-size:11.5px; padding:4px 0;">${state.lang==='en'?'Empty — tap + to add anime':(state.lang==='tr'?'Boş — anime eklemek için + tıkla':'Boşdur — anime əlavə etmək üçün + bas')}</span></div>`}
+    </div>`;
+  }).join('');
+}
+
+let catPickerTargetId = null;
+function openCatPicker(catId){
+  catPickerTargetId = catId;
+  const cat = state.categories.find(c=>c.id===catId);
+  document.getElementById('catPickerTitle').textContent = cat ? (cat.name[state.lang]||cat.name.az) : '';
+  document.getElementById('catPickerSearch').value = '';
+  renderCatPickerList();
+  goPage('catpicker');
+}
+
+function renderCatPickerList(){
+  const cat = state.categories.find(c=>c.id===catPickerTargetId);
+  if(!cat) return;
+  const q = document.getElementById('catPickerSearch').value.trim().toLowerCase();
+  const wrap = document.getElementById('catPickerList');
+  const items = state.library.filter(m=>{
+    const title = (m.title.english || m.title.romaji || '').toLowerCase();
+    return !q || title.includes(q);
+  });
+  if(items.length===0){
+    wrap.innerHTML = `<div class="empty-row">${t('empty.noResults')}</div>`;
+    return;
+  }
+  wrap.innerHTML = items.map(m=>{
+    const title = m.title.english || m.title.romaji;
+    const cover = m.coverImage ? m.coverImage.large : '';
+    const inCat = (cat.animeIds||[]).includes(m.id);
+    return `
+    <div class="al-result pickable ${inCat?'picked':''}" onclick="toggleCatAnime('${cat.id}', ${m.id})">
+      <div class="al-poster" style="background-image:url('${cover}')"></div>
+      <div class="al-info"><div class="al-title">${title}</div><div class="al-meta">${m.episodes||'?'} ${t('admin.eps')}</div></div>
+      <div class="pick-checkbox ${inCat?'checked':''}">
+        ${inCat ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleCatAnime(catId, animeId){
+  if(!requireAdmin()) return;
+  const cat = state.categories.find(c=>c.id===catId);
+  if(!cat) return;
+  if(!cat.animeIds) cat.animeIds = [];
+  const idx = cat.animeIds.indexOf(animeId);
+  if(idx>=0) cat.animeIds.splice(idx,1);
+  else cat.animeIds.push(animeId);
+  saveCategories();
+  renderCatPickerList();
+  renderHome();
+}
+
+function removeCatAnime(catId, animeId){
+  if(!requireAdmin()) return;
+  const cat = state.categories.find(c=>c.id===catId);
+  if(!cat) return;
+  cat.animeIds = (cat.animeIds||[]).filter(id=>id!==animeId);
+  saveCategories();
+  renderCategoryList();
+  renderHome();
+}
+
+function updateSystemTab(){
+  document.getElementById('adminLibCount').textContent = state.library.length + ' ' + (state.lang==='en'?'anime':'anime');
+}
+
+// ================= SEASON LINKING (base pick -> multi-select -> confirm) =================
+let seasonMergeBaseId = null;
+let seasonMergeSelected = [];
+let seasonPickDebounce;
+
+function renderSeasonBaseList(){
+  const wrap = document.getElementById('seasonBaseList');
+  document.getElementById('seasonPickSection').classList.add('hidden');
+  seasonMergeBaseId = null;
+  seasonMergeSelected = [];
+  hideSeasonConfirmBar();
+
+  if(state.library.length === 0){
+    wrap.innerHTML = `<div class="empty-row">${state.lang==='en'?'Add an anime to the library first':(state.lang==='tr'?'Önce kütüphaneye bir anime ekle':'Əvvəlcə kitabxanaya anime əlavə et')}</div>`;
+    return;
+  }
+  wrap.innerHTML = state.library.map(m=>{
+    const title = m.title.english || m.title.romaji;
+    const cover = m.coverImage ? m.coverImage.large : '';
+    const seasonCount = (m.seasons ? m.seasons.length : 0) + 1;
+    return `
+    <div class="season-base-card" id="baseCard-${m.id}" onclick="selectSeasonBase(${m.id})">
+      <div class="al-poster" style="background-image:url('${cover}')"></div>
+      <div class="al-info"><div class="al-title">${title}</div><div class="al-meta">${seasonCount} ${state.lang==='en'?'season(s)':'sezon'}</div></div>
+    </div>`;
+  }).join('');
+}
+
+function selectSeasonBase(id){
+  seasonMergeBaseId = id;
+  seasonMergeSelected = [];
+  document.querySelectorAll('.season-base-card').forEach(c=>c.classList.toggle('active', c.id==='baseCard-'+id));
+  document.getElementById('seasonPickSection').classList.remove('hidden');
+  document.getElementById('seasonPickSearchInput').value = '';
+  renderSeasonPickTrending();
+  hideSeasonConfirmBar();
+}
+
+async function renderSeasonPickTrending(){
+  const wrap = document.getElementById('seasonPickResults');
+  wrap.innerHTML = `<div class="loading-row">⟳ Yüklənir...</div>`;
+  try{
+    const results = await anilistTrending();
+    renderSeasonPickResults(results);
+  }catch(e){
+    wrap.innerHTML = `<div class="empty-row">Bağlantı xətası.</div>`;
+  }
+}
+async function runSeasonPickSearch(q){
+  const wrap = document.getElementById('seasonPickResults');
+  wrap.innerHTML = `<div class="loading-row">⟳ Axtarılır...</div>`;
+  try{
+    const results = await anilistSearch(q);
+    renderSeasonPickResults(results);
+  }catch(e){
+    wrap.innerHTML = `<div class="empty-row">Bağlantı xətası.</div>`;
+  }
+}
+
+function renderSeasonPickResults(results){
+  const wrap = document.getElementById('seasonPickResults');
+  const filtered = (results||[]).filter(m=>m.id !== seasonMergeBaseId);
+  if(filtered.length===0){
+    wrap.innerHTML = `<div class="empty-row">${t('empty.noResults')}</div>`;
+    return;
+  }
+  wrap.innerHTML = filtered.map(m=>{
+    const title = m.title.english || m.title.romaji || m.title.native;
+    const cover = m.coverImage ? m.coverImage.large : '';
+    const picked = seasonMergeSelected.some(x=>x.id===m.id);
+    return `
+    <div class="al-result pickable ${picked?'picked':''}" id="pick-${m.id}" onclick='toggleSeasonPick(${JSON.stringify(m).replace(/'/g,"&apos;")})'>
+      <div class="al-poster" style="background-image:url('${cover}')"></div>
+      <div class="al-info">
+        <div class="al-title">${title}</div>
+        <div class="al-meta">${m.seasonYear||'—'} · ${m.episodes||'?'} ${t('admin.eps')}</div>
+      </div>
+      <div class="pick-checkbox ${picked?'checked':''}" id="checkbox-${m.id}">
+        ${picked ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleSeasonPick(media){
+  const idx = seasonMergeSelected.findIndex(x=>x.id===media.id);
+  if(idx>=0){ seasonMergeSelected.splice(idx,1); }
+  else{ seasonMergeSelected.push(media); }
+
+  const card = document.getElementById('pick-'+media.id);
+  const box = document.getElementById('checkbox-'+media.id);
+  const nowPicked = idx<0;
+  if(card) card.classList.toggle('picked', nowPicked);
+  if(box){
+    box.classList.toggle('checked', nowPicked);
+    box.innerHTML = nowPicked ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : '';
+  }
+  updateSeasonConfirmBar();
+}
+
+function updateSeasonConfirmBar(){
+  const bar = document.getElementById('seasonConfirmBar');
+  const count = seasonMergeSelected.length;
+  if(count > 0){
+    document.getElementById('seasonSelectedCount').textContent = count;
+    bar.classList.remove('hidden');
+  } else {
+    bar.classList.add('hidden');
+  }
+  renderSeasonPreview();
+}
+function hideSeasonConfirmBar(){
+  const bar = document.getElementById('seasonConfirmBar');
+  if(bar) bar.classList.add('hidden');
+  const preview = document.getElementById('seasonPreviewList');
+  const wrap = document.getElementById('seasonPreviewWrap');
+  if(preview) preview.innerHTML = '';
+  if(wrap) wrap.classList.add('hidden');
+}
+
+// Shows the picked seasons in order, with up/down controls, before confirming.
+function renderSeasonPreview(){
+  const preview = document.getElementById('seasonPreviewList');
+  const wrap = document.getElementById('seasonPreviewWrap');
+  if(!preview || !wrap) return;
+  if(seasonMergeSelected.length===0){ preview.innerHTML=''; wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+  const base = state.library.find(x=>x.id===seasonMergeBaseId);
+  const baseTitle = base ? (base.title.english||base.title.romaji) : '';
+  preview.innerHTML = `<div class="settings-row-sub" style="padding:0 0 8px; font-size:11.5px;">${state.lang==='en'?`Order under ${baseTitle}`:(state.lang==='tr'?`${baseTitle} altında sıra`:`${baseTitle} altında sıra`)} (${state.lang==='en'?'Season 1':'Sezon 1'} = ${baseTitle})</div>` +
+    seasonMergeSelected.map((m,idx)=>{
+      const title = m.title.english || m.title.romaji;
+      const cover = m.coverImage ? m.coverImage.large : '';
+      return `
+      <div class="lib-manage-row" style="margin-bottom:6px;">
+        <div class="al-poster" style="width:40px;height:56px;background-image:url('${cover}')"></div>
+        <div class="al-info"><div class="al-title" style="font-size:12px;">${title}</div><div class="al-meta">${state.lang==='en'?'Season':'Sezon'} ${idx+2}</div></div>
+        <div style="display:flex; gap:4px;">
+          <button class="lib-order-btn" ${idx===0?'disabled':''} onclick="reorderSeasonPick(${idx}, -1)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"/></svg>
+          </button>
+          <button class="lib-order-btn" ${idx===seasonMergeSelected.length-1?'disabled':''} onclick="reorderSeasonPick(${idx}, 1)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+        </div>
+      </div>`;
+    }).join('');
+}
+
+function reorderSeasonPick(idx, dir){
+  const newIdx = idx + dir;
+  if(newIdx < 0 || newIdx >= seasonMergeSelected.length) return;
+  [seasonMergeSelected[idx], seasonMergeSelected[newIdx]] = [seasonMergeSelected[newIdx], seasonMergeSelected[idx]];
+  renderSeasonPreview();
+}
+
+function confirmSeasonLink(){
+  if(!requireAdmin()) return;
+  const base = state.library.find(x=>x.id===seasonMergeBaseId);
+  if(!base || seasonMergeSelected.length===0) return;
+  if(!base.seasons) base.seasons = [];
+  seasonMergeSelected.forEach(m=> base.seasons.push(m));
+  const count = seasonMergeSelected.length;
+  seasonMergeSelected = [];
+  saveLibrary();
+  showToast(state.lang==='en' ? `${count} season(s) linked` : (state.lang==='tr' ? `${count} sezon bağlandı` : `${count} sezon bağlandı`));
+  renderHome();
+  renderSeasonBaseList();
+}
+
+function toggleLibrary(media){
+  if(!requireAdmin()) return;
+  const idx = state.library.findIndex(x=>x.id===media.id);
+  if(idx >= 0){
+    state.library.splice(idx,1);
+    deleteLibraryEntry(media.id); // must actually delete from Supabase, not just local state
+    showToast(t('toast.removed'));
+  } else {
+    state.library.push(media);
+    saveLibraryEntry(media);
+    showToast(t('toast.added'));
+    maybeSuggestSeasons(media);
+  }
+  const q = document.getElementById('adminSearchInput').value.trim();
+  if(q) runAdminSearch(q); else renderAdminTrending();
+  renderHome();
+}
+
+// ================= AUTO SEASON SUGGESTION (via AniList relations) =================
+// When an anime is added, check its AniList relations for PREQUEL/SEQUEL entries
+// that are also anime, and offer to auto-link them as seasons.
+// AniList only returns *direct* relations (A -> B), not chains (B -> C -> D).
+// So adding Season 1 only surfaces Season 2 unless we walk the chain ourselves:
+// follow SEQUEL links forward and PREQUEL links backward, a few hops in each
+// direction, collecting every connected season along the way.
+async function maybeSuggestSeasons(media){
+  if(!media.relations || !media.relations.edges) return;
+
+  const isSeasonNode = (e)=>{
+    const isSeasonType = ['SEQUEL','PREQUEL','SIDE_STORY'].includes(e.relationType);
+    const isAnime = e.node.type === 'ANIME';
+    const format = e.node.format;
+    const isSeriesFormat = !format || format === 'TV' || format === 'TV_SHORT';
+    return isSeasonType && isAnime && isSeriesFormat;
+  };
+
+  const collected = new Map(); // id -> {node, relationType}
+  const visited = new Set([media.id]);
+  let frontier = media.relations.edges.filter(isSeasonNode).map(e=>({node:e.node, relationType:e.relationType}));
+  frontier.forEach(f=> collected.set(f.node.id, f));
+
+  // Walk up to 4 hops out from the anime just added, in both directions.
+  const MAX_HOPS = 10; // enough to walk even long chains (e.g. AoT's 4+ seasons/parts) fully
+  for(let hop=0; hop<MAX_HOPS && frontier.length>0; hop++){
+    const nextFrontier = [];
+    for(const item of frontier){
+      if(visited.has(item.node.id)) continue;
+      visited.add(item.node.id);
+      try{
+        const full = await anilistById(item.nod
