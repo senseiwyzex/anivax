@@ -380,6 +380,8 @@
     <div class="detail-tags" id="detailTags"></div>
     <div class="detail-desc" id="detailDesc"></div>
     <div id="seasonSelector" style="display:flex; gap:8px; overflow-x:auto; margin-bottom:16px;"></div>
+    <div id="statusRow" style="display:flex; gap:8px; overflow-x:auto; margin-bottom:12px;"></div>
+    <div id="ratingRow" style="margin-bottom:16px;"></div>
     <div class="detail-actions">
       <button class="btn-primary" onclick="playEpisode(1)">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
@@ -388,6 +390,10 @@
     </div>
     <div class="ep-section-title" data-i18n="detail.episodes">Bölümlər</div>
     <div id="episodeList"></div>
+    <div class="row-section" id="similarSection" style="margin: 24px 0 0; padding:0;">
+      <div class="ep-section-title" data-i18n="detail.similar">Bunu izləyənlər bunları da izlədi</div>
+      <div class="row-scroll" id="similarRow" style="padding:0;"></div>
+    </div>
     <div style="height:20px"></div>
   </div>
 </div>
@@ -405,6 +411,15 @@
   <div class="player-frame" id="playerFrame">
     <svg id="playerPlaceholderIcon" width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#8B8F9C" stroke-width="1.6"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>
     <div class="ph-text" id="playerPlaceholderText" data-i18n="player.noSource">Video mənbəyi hələ bağlanmayıb.<br>Öz videonu əlavə edəndə burda oynayacaq.</div>
+
+    <!-- Episode list panel: lets the user jump between episodes without leaving the player. -->
+    <div id="playerEpisodePanel" class="hidden" style="position:absolute; top:0; right:0; bottom:0; width:min(280px,80%); z-index:10; padding:16px; background:rgba(10,12,18,0.96); overflow-y:auto;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+        <div style="font-size:13px; font-weight:800; color:#fff;" data-i18n="detail.episodes">Bölümlər</div>
+        <button onclick="togglePlayerEpisodePanel()" style="background:none;border:none;color:#fff;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <div id="playerEpisodeList"></div>
+    </div>
 
     <!-- Settings panel now lives INSIDE playerFrame so it stays visible and
          positioned correctly when the frame itself goes fullscreen (landscape). -->
@@ -445,6 +460,9 @@
         <div class="player-title" id="playerTitle">—</div>
         <div class="player-sub" id="playerSub">Bölüm 1</div>
       </div>
+      <button class="icon-btn" onclick="togglePlayerEpisodePanel()" title="Episodes">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+      </button>
       <button class="icon-btn" onclick="togglePlayerSettings()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -797,7 +815,7 @@ const I18N = {
     "row.continue":"İzləməyə davam et","row.continueEmpty":"Hələ izlədiyin bir bölüm yoxdur",
     "row.library":"Kitabxana","row.all":"hamısı","row.libraryEmpty":"Kitabxana boşdur. Admin paneldən anime əlavə et.",
     "search.title":"Axtarış","search.placeholder":"Kitabxanada axtar...",
-    "library.title":"Kitabxana","detail.watch":"İzlə","detail.episodes":"Bölümlər",
+    "library.title":"Kitabxana","detail.watch":"İzlə","detail.episodes":"Bölümlər","detail.similar":"Bunu izləyənlər bunları da izlədi",
     "player.title":"Oynadıcı","player.noSource":"Video mənbəyi hələ bağlanmayıb.<br>Öz videonu əlavə edəndə burda oynayacaq.",
     "admin.title":"Admin Panel","admin.searchPlaceholder":"AniList-də axtar (məs: Naruto)...",
     "admin.tab.add":"Anime əlavə et","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kateqoriyalar","admin.tab.manage":"İdarəetmə","admin.tab.system":"Sistem",
@@ -830,7 +848,7 @@ const I18N = {
     "row.continue":"İzlemeye devam et","row.continueEmpty":"Henüz izlediğin bir bölüm yok",
     "row.library":"Kitaplık","row.all":"tümü","row.libraryEmpty":"Kitaplık boş. Admin panelden anime ekle.",
     "search.title":"Ara","search.placeholder":"Kitaplıkta ara...",
-    "library.title":"Kitaplık","detail.watch":"İzle","detail.episodes":"Bölümler",
+    "library.title":"Kitaplık","detail.watch":"İzle","detail.episodes":"Bölümler","detail.similar":"Bunu izleyenler şunları da izledi",
     "player.title":"Oynatıcı","player.noSource":"Video kaynağı henüz bağlanmadı.<br>Kendi videonu ekleyince burada oynayacak.",
     "admin.title":"Admin Panel","admin.searchPlaceholder":"AniList'te ara (örn: Naruto)...",
     "admin.tab.add":"Anime ekle","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kategoriler","admin.tab.manage":"Yönetim","admin.tab.system":"Sistem",
@@ -863,7 +881,7 @@ const I18N = {
     "row.continue":"Continue watching","row.continueEmpty":"You haven't watched any episodes yet",
     "row.library":"Library","row.all":"see all","row.libraryEmpty":"Library is empty. Add anime from the admin panel.",
     "search.title":"Search","search.placeholder":"Search library...",
-    "library.title":"Library","detail.watch":"Watch","detail.episodes":"Episodes",
+    "library.title":"Library","detail.watch":"Watch","detail.episodes":"Episodes","detail.similar":"People who watched this also watched",
     "player.title":"Player","player.noSource":"Video source not connected yet.<br>It will play here once you add your own video.",
     "admin.title":"Admin Panel","admin.searchPlaceholder":"Search AniList (e.g. Naruto)...",
     "admin.tab.add":"Add anime","admin.tab.seasons":"Seasons","admin.tab.categories":"Categories","admin.tab.manage":"Manage","admin.tab.system":"System",
@@ -902,7 +920,11 @@ let state = {
   library: [],
   categories: [],
   watchHistory: [],
-  notifications: [] // [{id, animeId, animeTitle, episode, timestamp, read}]
+  notifications: [],
+  animeStatuses: {}, // { animeId: 'watching'|'planned'|'completed'|'on_hold'|'dropped' }
+  userRatings: {},   // { animeId: 1-10 }
+  communityRatings: {}, // { animeId: {avg, count} } — aggregated from all users
+  episodeProgress: {}   // { "animeId:episode": true }
 };
 
 // ================= ADMIN AUTH =================
@@ -1119,10 +1141,50 @@ async function loadState(){
 
   try{ await refreshCurrentUser(); }catch(e){ console.error('loadState: refreshCurrentUser failed', e); }
   try{ await loadWatchHistory(); }catch(e){ console.error('loadState: loadWatchHistory failed', e); }
+  try{ await loadUserAnimeData(); }catch(e){ console.error('loadState: loadUserAnimeData failed', e); }
+  try{ await loadCommunityRatings(); }catch(e){ console.error('loadState: loadCommunityRatings failed', e); }
 
   try{ applyI18n(); }catch(e){ console.error('loadState: applyI18n failed', e); }
   try{ applyTheme(); }catch(e){ console.error('loadState: applyTheme failed', e); }
   try{ renderHome(); }catch(e){ console.error('loadState: renderHome failed', e); }
+}
+
+// Loads this user's per-anime status (watching/planned/etc), 1-10 ratings, and
+// per-episode "watched" flags in one batch — all keyed by anime_id for O(1) lookup.
+async function loadUserAnimeData(){
+  if(!currentUser){ state.animeStatuses = {}; state.userRatings = {}; state.episodeProgress = {}; return; }
+  try{
+    const { data } = await withTimeout(sb.from('user_anime_status').select('*').eq('user_id', currentUser.id), 5000);
+    state.animeStatuses = {};
+    (data||[]).forEach(r => state.animeStatuses[r.anime_id] = r.status);
+  }catch(e){}
+  try{
+    const { data } = await withTimeout(sb.from('user_ratings').select('*').eq('user_id', currentUser.id), 5000);
+    state.userRatings = {};
+    (data||[]).forEach(r => state.userRatings[r.anime_id] = r.rating);
+  }catch(e){}
+  try{
+    const { data } = await withTimeout(sb.from('episode_progress').select('*').eq('user_id', currentUser.id).eq('watched', true), 5000);
+    state.episodeProgress = {};
+    (data||[]).forEach(r => state.episodeProgress[r.anime_id+':'+r.episode] = true);
+  }catch(e){}
+}
+
+// Community (Anivax) rating averages — public data, loaded once for everyone.
+async function loadCommunityRatings(){
+  try{
+    const { data } = await withTimeout(sb.from('user_ratings').select('anime_id, rating'), 5000);
+    const sums = {};
+    (data||[]).forEach(r=>{
+      if(!sums[r.anime_id]) sums[r.anime_id] = {sum:0, count:0};
+      sums[r.anime_id].sum += r.rating;
+      sums[r.anime_id].count += 1;
+    });
+    state.communityRatings = {};
+    Object.keys(sums).forEach(id=>{
+      state.communityRatings[id] = { avg: (sums[id].sum/sums[id].count).toFixed(1), count: sums[id].count };
+    });
+  }catch(e){}
 }
 
 function saveSettings(){
@@ -1154,6 +1216,50 @@ async function saveCategories(){
     }
   }catch(e){}
 }
+// ================= USER ANIME STATUS (watching/planned/completed/on_hold/dropped) =================
+const ANIME_STATUSES = ['watching','planned','completed','on_hold','dropped'];
+async function setAnimeStatus(animeId, status){
+  if(!currentUser){
+    showToast(state.lang==='en'?'Sign in to use lists':(state.lang==='tr'?'Listeler için giriş yap':'Siyahılar üçün giriş et'));
+    return;
+  }
+  state.animeStatuses[animeId] = status;
+  try{
+    await sb.from('user_anime_status').upsert({ user_id: currentUser.id, anime_id: animeId, status, updated_at: new Date().toISOString() }, { onConflict:'user_id,anime_id' });
+  }catch(e){}
+}
+function statusLabel(status){
+  const labels = {
+    az: { watching:'İzləyirəm', planned:'İzləyəcəyəm', completed:'Tamamladım', on_hold:'Gözlədirəm', dropped:'Buraxdım' },
+    tr: { watching:'İzliyorum', planned:'İzleyeceğim', completed:'Tamamladım', on_hold:'Bekletiyorum', dropped:'Bıraktım' },
+    en: { watching:'Watching', planned:'Plan to watch', completed:'Completed', on_hold:'On hold', dropped:'Dropped' }
+  };
+  return (labels[state.lang]||labels.az)[status] || status;
+}
+
+// ================= USER RATINGS (1-10, separate from AniList's score) =================
+async function setUserRating(animeId, rating){
+  if(!currentUser){
+    showToast(state.lang==='en'?'Sign in to rate':(state.lang==='tr'?'Puanlamak için giriş yap':'Qiymətləndirmək üçün giriş et'));
+    return;
+  }
+  state.userRatings[animeId] = rating;
+  try{
+    await sb.from('user_ratings').upsert({ user_id: currentUser.id, anime_id: animeId, rating, updated_at: new Date().toISOString() }, { onConflict:'user_id,anime_id' });
+    await loadCommunityRatings(); // refresh the average shown to everyone
+  }catch(e){}
+}
+
+// ================= EPISODE WATCHED (manual + auto-at-80%) =================
+async function markEpisodeWatched(animeId, episode, watched){
+  if(!currentUser) return;
+  const key = animeId+':'+episode;
+  if(watched) state.episodeProgress[key] = true; else delete state.episodeProgress[key];
+  try{
+    await sb.from('episode_progress').upsert({ user_id: currentUser.id, anime_id: animeId, episode, watched, updated_at: new Date().toISOString() }, { onConflict:'user_id,anime_id,episode' });
+  }catch(e){}
+}
+
 async function saveHistory(progressSeconds){
   if(!currentUser) return; // history requires being signed in
   try{
@@ -1270,6 +1376,7 @@ async function anilistById(id){
         description(asHtml:false) episodes genres seasonYear averageScore status studios(isMain:true){ nodes{ name } }
         nextAiringEpisode{ episode }
         relations{ edges{ relationType node{ id type format title{ romaji english native } coverImage{ large } episodes seasonYear } } }
+        recommendations(sort: RATING_DESC, perPage: 8){ nodes{ mediaRecommendation{ id title{ romaji english } coverImage{ large } averageScore } } }
       }
     }`;
   const res = await fetch('https://graphql.anilist.co', {
@@ -2189,6 +2296,10 @@ function openDetail(id, base){
   document.getElementById('detailTags').innerHTML = extraTags.join('') + (m.genres||[]).map(g=>`<span class="tag">${g}</span>`).join('') + `<span class="tag">${m.seasonYear||''}</span>`;
   document.getElementById('detailHero').style.backgroundImage = `url('${m.bannerImage || m.coverImage.large}')`;
 
+  renderStatusRow(m.id);
+  renderRatingRow(m.id);
+  renderSimilarAnime(m.id);
+
   const epList = document.getElementById('episodeList');
   let total;
   if(m.episodes && m.episodes > 0){
@@ -2201,11 +2312,12 @@ function openDetail(id, base){
   let html = '';
   for(let i=1;i<=total;i++){
     const hasSource = m.episodeSources && m.episodeSources[i] && m.episodeSources[i].video;
+    const isWatched = !!state.episodeProgress[m.id+':'+i];
     html += `
     <div class="ep-row">
-      <div class="ep-thumb" onclick="playEpisode(${i})">▶</div>
+      <div class="ep-thumb" onclick="playEpisode(${i})">${isWatched ? '✓' : '▶'}</div>
       <div onclick="playEpisode(${i})" style="flex:1; min-width:0;">
-        <div class="ep-num">${state.lang==='en'?'EPISODE':'BÖLÜM'} ${i} ${hasSource?'':'· '+(state.lang==='en'?'no source':(state.lang==='tr'?'kaynak yok':'mənbə yoxdur'))}</div>
+        <div class="ep-num">${state.lang==='en'?'EPISODE':'BÖLÜM'} ${i} ${isWatched ? '· ✓' : (hasSource?'':'· '+(state.lang==='en'?'no source':(state.lang==='tr'?'kaynak yok':'mənbə yoxdur')))}</div>
         <div class="ep-name">${title} — ${i}</div>
       </div>
       ${isAdmin ? `<button class="cat-icon-btn" onclick="event.stopPropagation();openEpisodeSourceEditor(${i})" style="margin-right:4px;">
@@ -2216,6 +2328,65 @@ function openDetail(id, base){
   }
   epList.innerHTML = html;
   goPage('detail');
+}
+
+// Renders "similar anime" from AniList's own recommendations for this title —
+// discovery beyond just what's already in the library, as requested.
+async function renderSimilarAnime(animeId){
+  const wrap = document.getElementById('similarRow');
+  const section = document.getElementById('similarSection');
+  wrap.innerHTML = `<div class="loading-row" style="margin:0;">⟳</div>`;
+  try{
+    const full = await anilistById(animeId);
+    const recs = (full?.recommendations?.nodes || [])
+      .map(n => n.mediaRecommendation)
+      .filter(Boolean)
+      .slice(0, 8);
+    if(recs.length === 0){ section.style.display = 'none'; return; }
+    section.style.display = 'block';
+    wrap.innerHTML = recs.map(r=>{
+      const title = r.title.english || r.title.romaji;
+      const cover = r.coverImage ? r.coverImage.large : '';
+      const score = r.averageScore ? (r.averageScore/10).toFixed(1) : null;
+      const inLibrary = state.library.some(x=>x.id===r.id || (x.seasons||[]).some(s=>s.id===r.id));
+      return `
+      <div class="card" onclick="${inLibrary ? `openDetail(${r.id})` : ''}" style="${inLibrary?'':'cursor:default;'}">
+        <div class="card-poster" style="background-image:url('${cover}')">
+          ${score ? `<div class="card-score">★ ${score}</div>` : ''}
+        </div>
+        <div class="card-info"><div class="card-name">${title}</div></div>
+      </div>`;
+    }).join('');
+  }catch(e){
+    section.style.display = 'none';
+  }
+}
+
+// Status picker: Watching / Planned / Completed / On hold / Dropped pills.
+function renderStatusRow(animeId){
+  const wrap = document.getElementById('statusRow');
+  const current = state.animeStatuses[animeId];
+  wrap.innerHTML = ANIME_STATUSES.map(s=>`
+    <button class="option-pill ${current===s?'active':''}" style="flex-shrink:0;" onclick="setAnimeStatus(${animeId}, '${s}'); renderStatusRow(${animeId});">${statusLabel(s)}</button>
+  `).join('');
+}
+
+// Rating widget: 1-10 tap-to-rate, plus the AniList score and the aggregated
+// Anivax community average shown side by side (AniList stays primary/visible
+// on posters — this is the detail-page-only "our own rating" layer).
+function renderRatingRow(animeId){
+  const wrap = document.getElementById('ratingRow');
+  const myRating = state.userRatings[animeId];
+  const community = state.communityRatings[animeId];
+  const stars = Array.from({length:10}, (_,i)=>i+1).map(n=>`
+    <span onclick="setUserRating(${animeId}, ${n}); renderRatingRow(${animeId});" style="cursor:pointer; font-size:16px; color:${myRating>=n ? '#FFD25A' : 'var(--line)'};">★</span>
+  `).join('');
+  const communityLabel = community
+    ? (state.lang==='en' ? `Anivax rating: ${community.avg} (${community.count})` : (state.lang==='tr' ? `Anivax puanı: ${community.avg} (${community.count})` : `Anivax qiyməti: ${community.avg} (${community.count})`))
+    : (state.lang==='en' ? 'No Anivax ratings yet' : (state.lang==='tr' ? 'Henüz Anivax puanı yok' : 'Hələ Anivax qiyməti yoxdur'));
+  wrap.innerHTML = `
+    <div style="display:flex; gap:2px; margin-bottom:4px;">${stars}</div>
+    <div class="settings-row-sub">${communityLabel}</div>`;
 }
 
 // ================= EPISODE SOURCE EDITOR (admin only) =================
@@ -2438,10 +2609,17 @@ function mountDirectPlayer(frame, url, subtitleUrl){
 // browser's default <video> chrome, which looked inconsistent across devices.
 function attachPlayerBehaviors(vid, frame){
   let skipBtnShown = false;
+  let autoWatchedMarked = false;
   vid.addEventListener('timeupdate', ()=>{
     if(state.skipIntro && !skipBtnShown && vid.currentTime > 3 && vid.currentTime < 90){
       showSkipIntroButton(frame, vid);
       skipBtnShown = true;
+    }
+    // Auto-mark "watched" once past 80% — the small anime-site UX detail that
+    // makes the episode list show a checkmark without the user doing anything.
+    if(!autoWatchedMarked && vid.duration && vid.currentTime / vid.duration >= 0.8){
+      autoWatchedMarked = true;
+      markEpisodeWatched(currentDetail?.id, currentEpisodeNum, true);
     }
   });
   vid.addEventListener('ended', ()=>{
@@ -2669,7 +2847,38 @@ function stopPlayerAndGoBack(){
 function togglePlayerSettings(){
   const panel = document.getElementById('playerSettingsPanel');
   panel.classList.toggle('hidden');
-  if(!panel.classList.contains('hidden')) initPlayerToggles();
+  if(!panel.classList.contains('hidden')){
+    initPlayerToggles();
+    document.getElementById('playerEpisodePanel').classList.add('hidden'); // only one panel open at a time
+  }
+}
+
+function togglePlayerEpisodePanel(){
+  const panel = document.getElementById('playerEpisodePanel');
+  panel.classList.toggle('hidden');
+  if(!panel.classList.contains('hidden')){
+    renderPlayerEpisodeList();
+    document.getElementById('playerSettingsPanel').classList.add('hidden');
+  }
+}
+
+// Compact episode list inside the player itself, so switching episodes
+// doesn't require leaving to the detail page.
+function renderPlayerEpisodeList(){
+  const wrap = document.getElementById('playerEpisodeList');
+  if(!currentDetail){ wrap.innerHTML = ''; return; }
+  const total = getEpisodeTotal(currentDetail);
+  let html = '';
+  for(let i=1;i<=total;i++){
+    const isWatched = !!state.episodeProgress[currentDetail.id+':'+i];
+    const isCurrent = i === currentEpisodeNum;
+    html += `
+    <div onclick="togglePlayerEpisodePanel(); playEpisode(${i});" style="display:flex; align-items:center; gap:8px; padding:10px 8px; border-radius:9px; margin-bottom:4px; background:${isCurrent?'rgba(232,184,75,0.15)':'transparent'}; cursor:pointer;">
+      <span style="width:18px; text-align:center; color:${isWatched?'#6FBF8B':'#8B8F9C'}; font-size:13px;">${isWatched?'✓':(isCurrent?'▶':'')}</span>
+      <span style="font-size:13px; color:${isCurrent?'#E8B84B':'#fff'}; font-weight:${isCurrent?'700':'500'};">${state.lang==='en'?'Episode':'Bölüm'} ${i}</span>
+    </div>`;
+  }
+  wrap.innerHTML = html;
 }
 
 function buildPlayerSettingsPanel(src){
