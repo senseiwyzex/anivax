@@ -755,7 +755,7 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 // ================= SUPABASE CONFIG =================
 // Wrapped in try/catch: if the CDN script fails to load for any reason
@@ -764,15 +764,16 @@
 const SUPABASE_URL = 'https://yhyukjmotvbbrjmvcrof.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_9QCf-9pzAlJk3pWIHeEbTw_H8cpd3hG';
 let sb = null;
-try{
-  if(window.supabase && window.supabase.createClient){
-    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-  } else {
-    console.error('Supabase SDK did not load from CDN — running in offline/local mode.');
-  }
-}catch(e){
-  console.error('Supabase init failed:', e);
+function initSupabase(){
+  try{
+    if(window.supabase && window.supabase.createClient){
+      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      return true;
+    }
+  }catch(e){ console.error('Supabase init failed:', e); }
+  return false;
 }
+initSupabase();
 // Tiny helper so every sb.from(...) call site doesn't need its own null-check.
 function sbReady(){ return !!sb; }
 let currentUser = null; // set on auth state change
@@ -1798,5 +1799,4 @@ async function maybeSuggestSeasons(media){
     state.lang==='en' ? `AniList shows related seasons for ${baseTitle}` :
     (state.lang==='tr' ? `AniList, ${baseTitle} için ilişkili sezonlar gösteriyor` : `AniList, ${baseTitle} üçün əlaqəli sezonlar göstərir`);
   wrap.innerHTML = related.map(e=>{
-    const node = e.node;
-    co
+    const node = e.n
