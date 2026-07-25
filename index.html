@@ -211,6 +211,22 @@
 
   .theme-swatch{ width:14px; height:14px; border-radius:50%; border:1px solid var(--line); }
 
+  /* ---------- STATUS PILLS (watching/planned/completed/on_hold/dropped) ---------- */
+  .status-pill{
+    flex-shrink:0; padding:9px 13px; border-radius:11px; border:1.5px solid var(--line); background:var(--bg-elevated);
+    font-size:12px; font-weight:700; color:var(--text-dim); display:flex; align-items:center; gap:6px;
+  }
+  .status-pill span{ font-size:11px; }
+  .status-pill.active{ border-color: var(--pc); color: var(--pc); background: color-mix(in srgb, var(--pc) 14%, transparent); }
+
+  /* ---------- RATING CARD ---------- */
+  .rating-card{ background: var(--bg-elevated); border:1px solid var(--line); border-radius:14px; padding:14px 16px; }
+  .rating-card-label{ font-size:11.5px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px; }
+  .rating-stars{ display:flex; gap:3px; margin-bottom:8px; }
+  .rate-star{ cursor:pointer; font-size:20px; line-height:1; transition: transform .1s ease; }
+  .rate-star:active{ transform: scale(1.2); }
+  .rating-community{ font-size:12px; color:var(--text-dim); font-weight:600; }
+
   .toggle{ width:44px; height:26px; border-radius:20px; background:var(--line); position:relative; flex-shrink:0; }
   .toggle.on{ background: var(--accent); }
   .toggle-knob{ width:20px; height:20px; border-radius:50%; background:#fff; position:absolute; top:3px; left:3px; transition: transform .2s ease; box-shadow:0 1px 3px rgba(0,0,0,0.3); }
@@ -689,6 +705,13 @@
           <button class="btn-ghost" onclick="changeUsername()" data-i18n="settings.save">Saxla</button>
         </div>
       </div>
+      <div class="settings-row hidden" id="listsPrivacyRow">
+        <div>
+          <div class="settings-row-label" data-i18n="settings.listsPublic">Siyahılarım görünsün</div>
+          <div class="settings-row-sub" data-i18n="settings.listsPublicSub">Digər istifadəçilər sənin izləmə statuslarını görə bilsin</div>
+        </div>
+        <div class="toggle" id="toggleListsPublic" onclick="toggleListsPublic()"><div class="toggle-knob"></div></div>
+      </div>
     </div>
   </div>
 
@@ -834,6 +857,7 @@ const I18N = {
     "settings.title":"Ayarlar","settings.admin":"Admin Panel","settings.adminSub":"Anime əlavə et / idarə et",
     "settings.language":"Dil","settings.theme":"Görünüş","settings.playback":"Oxutma","settings.account":"Hesab",
     "settings.changeUsername":"İstifadəçi adını dəyiş","settings.save":"Saxla",
+    "settings.listsPublic":"Siyahılarım görünsün","settings.listsPublicSub":"Digər istifadəçilər sənin izləmə statuslarını görə bilsin",
     "auth.title":"Hesab","auth.username":"İstifadəçi adı","auth.email":"E-poçt","auth.password":"Şifrə",
     "auth.signup":"Hesab yarat","auth.toggleToSignin":"Artıq hesabın var? Giriş et",
     "settings.autoplay":"Avtomatik növbəti bölüm","settings.autoplaySub":"Bölüm bitəndə növbətini başlat",
@@ -867,6 +891,7 @@ const I18N = {
     "settings.title":"Ayarlar","settings.admin":"Admin Panel","settings.adminSub":"Anime ekle / yönet",
     "settings.language":"Dil","settings.theme":"Görünüm","settings.playback":"Oynatma","settings.account":"Hesap",
     "settings.changeUsername":"Kullanıcı adını değiştir","settings.save":"Kaydet",
+    "settings.listsPublic":"Listelerim görünsün","settings.listsPublicSub":"Diğer kullanıcılar izleme durumlarını görebilsin",
     "auth.title":"Hesap","auth.username":"Kullanıcı adı","auth.email":"E-posta","auth.password":"Şifre",
     "auth.signup":"Hesap oluştur","auth.toggleToSignin":"Zaten hesabın var mı? Giriş yap",
     "settings.autoplay":"Otomatik sonraki bölüm","settings.autoplaySub":"Bölüm bitince sonrakini başlat",
@@ -900,6 +925,7 @@ const I18N = {
     "settings.title":"Settings","settings.admin":"Admin Panel","settings.adminSub":"Add / manage anime",
     "settings.language":"Language","settings.theme":"Appearance","settings.playback":"Playback","settings.account":"Account",
     "settings.changeUsername":"Change username","settings.save":"Save",
+    "settings.listsPublic":"Show my lists","settings.listsPublicSub":"Let other users see your watch statuses",
     "auth.title":"Account","auth.username":"Username","auth.email":"Email","auth.password":"Password",
     "auth.signup":"Create account","auth.toggleToSignin":"Already have an account? Sign in",
     "settings.autoplay":"Autoplay next episode","settings.autoplaySub":"Start the next episode automatically",
@@ -968,6 +994,12 @@ async function refreshCurrentUser(){
     const result = await withTimeout(sb.auth.getUser(), 4000);
     currentUser = result && result.data ? result.data.user : null;
   }catch(e){ currentUser = null; }
+  if(currentUser){
+    try{
+      const { data } = await withTimeout(sb.from('profiles').select('lists_public').eq('id', currentUser.id).single(), 4000);
+      state.listsPublic = data ? data.lists_public !== false : true;
+    }catch(e){ state.listsPublic = true; }
+  }
   updateAccountUI();
 }
 
@@ -975,6 +1007,7 @@ function updateAccountUI(){
   const wrap = document.getElementById('accountStatus');
   if(!wrap) return;
   const renameWrap = document.getElementById('usernameChangeRow');
+  const privacyWrap = document.getElementById('listsPrivacyRow');
   if(currentUser){
     wrap.innerHTML = `
       <div class="settings-row-label">${currentUser.user_metadata?.username || currentUser.email}</div>
@@ -985,12 +1018,26 @@ function updateAccountUI(){
       renameWrap.classList.remove('hidden');
       document.getElementById('newUsernameInput').value = currentUser.user_metadata?.username || '';
     }
+    if(privacyWrap){
+      privacyWrap.classList.remove('hidden');
+      document.getElementById('toggleListsPublic').classList.toggle('on', state.listsPublic !== false);
+    }
   } else {
     wrap.innerHTML = `<div class="settings-row-sub">${state.lang==='en'?'Not signed in':(state.lang==='tr'?'Giriş yapılmadı':'Giriş edilməyib')}</div>`;
     document.getElementById('accountAuthBtn').textContent = state.lang==='en'?'Sign in':(state.lang==='tr'?'Giriş yap':'Giriş et');
     document.getElementById('accountAuthBtn').onclick = ()=> goPage('auth');
     if(renameWrap) renameWrap.classList.add('hidden');
+    if(privacyWrap) privacyWrap.classList.add('hidden');
   }
+}
+
+async function toggleListsPublic(){
+  if(!currentUser) return;
+  state.listsPublic = state.listsPublic === false ? true : false;
+  document.getElementById('toggleListsPublic').classList.toggle('on', state.listsPublic);
+  try{
+    await sb.from('profiles').update({ lists_public: state.listsPublic }).eq('id', currentUser.id);
+  }catch(e){}
 }
 
 async function changeUsername(){
@@ -2296,9 +2343,12 @@ function openDetail(id, base){
   document.getElementById('detailTags').innerHTML = extraTags.join('') + (m.genres||[]).map(g=>`<span class="tag">${g}</span>`).join('') + `<span class="tag">${m.seasonYear||''}</span>`;
   document.getElementById('detailHero').style.backgroundImage = `url('${m.bannerImage || m.coverImage.large}')`;
 
-  renderStatusRow(m.id);
-  renderRatingRow(m.id);
-  renderSimilarAnime(m.id);
+  // Status/rating/watched-progress are keyed by the BASE anime id, not the
+  // per-season AniList id — so all seasons of one show share one status,
+  // one rating, and one combined episode-watched progress, as requested.
+  renderStatusRow(baseEntry.id);
+  renderRatingRow(baseEntry.id);
+  renderSimilarAnime(m.id); // recommendations stay per-season (AniList data is season-specific)
 
   const epList = document.getElementById('episodeList');
   let total;
@@ -2363,12 +2413,22 @@ async function renderSimilarAnime(animeId){
 }
 
 // Status picker: Watching / Planned / Completed / On hold / Dropped pills.
+const STATUS_ICONS = {
+  watching: '▶', planned: '☰', completed: '✓', on_hold: '❚❚', dropped: '✕'
+};
+const STATUS_COLORS = {
+  watching: '#7C9CFF', planned: '#8B8F9C', completed: '#6FBF8B', on_hold: '#E8B84B', dropped: '#E2604F'
+};
 function renderStatusRow(animeId){
   const wrap = document.getElementById('statusRow');
   const current = state.animeStatuses[animeId];
-  wrap.innerHTML = ANIME_STATUSES.map(s=>`
-    <button class="option-pill ${current===s?'active':''}" style="flex-shrink:0;" onclick="setAnimeStatus(${animeId}, '${s}'); renderStatusRow(${animeId});">${statusLabel(s)}</button>
-  `).join('');
+  wrap.innerHTML = ANIME_STATUSES.map(s=>{
+    const active = current===s;
+    const color = STATUS_COLORS[s];
+    return `<button class="status-pill ${active?'active':''}" style="--pc:${color};" onclick="setAnimeStatus(${animeId}, '${s}'); renderStatusRow(${animeId});">
+      <span>${STATUS_ICONS[s]}</span>${statusLabel(s)}
+    </button>`;
+  }).join('');
 }
 
 // Rating widget: 1-10 tap-to-rate, plus the AniList score and the aggregated
@@ -2379,14 +2439,18 @@ function renderRatingRow(animeId){
   const myRating = state.userRatings[animeId];
   const community = state.communityRatings[animeId];
   const stars = Array.from({length:10}, (_,i)=>i+1).map(n=>`
-    <span onclick="setUserRating(${animeId}, ${n}); renderRatingRow(${animeId});" style="cursor:pointer; font-size:16px; color:${myRating>=n ? '#FFD25A' : 'var(--line)'};">★</span>
+    <span onclick="setUserRating(${animeId}, ${n}); renderRatingRow(${animeId});" class="rate-star" style="color:${myRating>=n ? '#FFD25A' : 'var(--line)'};">★</span>
   `).join('');
   const communityLabel = community
-    ? (state.lang==='en' ? `Anivax rating: ${community.avg} (${community.count})` : (state.lang==='tr' ? `Anivax puanı: ${community.avg} (${community.count})` : `Anivax qiyməti: ${community.avg} (${community.count})`))
-    : (state.lang==='en' ? 'No Anivax ratings yet' : (state.lang==='tr' ? 'Henüz Anivax puanı yok' : 'Hələ Anivax qiyməti yoxdur'));
+    ? (state.lang==='en' ? `Anivax rating: ${community.avg}/10` : (state.lang==='tr' ? `Anivax puanı: ${community.avg}/10` : `Anivax qiyməti: ${community.avg}/10`))
+    : (state.lang==='en' ? 'No community ratings yet' : (state.lang==='tr' ? 'Henüz topluluk puanı yok' : 'Hələ icma qiyməti yoxdur'));
+  const countLabel = community ? ` · ${community.count} ${state.lang==='en'?'votes':(state.lang==='tr'?'oy':'səs')}` : '';
   wrap.innerHTML = `
-    <div style="display:flex; gap:2px; margin-bottom:4px;">${stars}</div>
-    <div class="settings-row-sub">${communityLabel}</div>`;
+    <div class="rating-card">
+      <div class="rating-card-label">${state.lang==='en'?'Your rating':(state.lang==='tr'?'Senin puanın':'Sənin qiymətin')}</div>
+      <div class="rating-stars">${stars}</div>
+      <div class="rating-community">${communityLabel}${countLabel}</div>
+    </div>`;
 }
 
 // ================= EPISODE SOURCE EDITOR (admin only) =================
