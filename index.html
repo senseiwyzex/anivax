@@ -227,6 +227,18 @@
   .rate-star:active{ transform: scale(1.2); }
   .rating-community{ font-size:12px; color:var(--text-dim); font-weight:600; }
 
+  /* ---------- FILTERS ---------- */
+  .filter-group{ margin-bottom:12px; }
+  .filter-label{ font-size:11px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px; }
+
+  /* ---------- STATS ---------- */
+  .stats-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:20px; }
+  .stat-card{ background:var(--bg-elevated); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  .stat-card-value{ font-size:22px; font-weight:800; color:var(--accent); margin-bottom:2px; }
+  .stat-card-label{ font-size:11px; color:var(--text-dim); font-weight:600; }
+  .stat-list-row{ display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  .stat-list-row:last-child{ border-bottom:none; }
+
   .toggle{ width:44px; height:26px; border-radius:20px; background:var(--line); position:relative; flex-shrink:0; }
   .toggle.on{ background: var(--accent); }
   .toggle-knob{ width:20px; height:20px; border-radius:50%; background:#fff; position:absolute; top:3px; left:3px; transition: transform .2s ease; box-shadow:0 1px 3px rgba(0,0,0,0.3); }
@@ -379,7 +391,28 @@
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
     </button>
     <div class="brand" data-i18n="library.title">Kitabxana</div>
-    <div style="width:38px"></div>
+    <button class="icon-btn" onclick="toggleFilterPanel()">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="18" x2="14" y2="18"/></svg>
+    </button>
+  </div>
+  <div id="filterPanel" class="hidden" style="padding:0 18px 14px;">
+    <div class="filter-group">
+      <div class="filter-label" data-i18n="filter.genre">Janr</div>
+      <div class="lang-options" id="filterGenre" style="padding:0;"></div>
+    </div>
+    <div class="filter-group">
+      <div class="filter-label" data-i18n="filter.status">Status</div>
+      <div class="lang-options" id="filterStatus" style="padding:0;"></div>
+    </div>
+    <div class="filter-group">
+      <div class="filter-label" data-i18n="filter.format">Format</div>
+      <div class="lang-options" id="filterFormat" style="padding:0;"></div>
+    </div>
+    <div class="filter-group">
+      <div class="filter-label" data-i18n="filter.year">İl</div>
+      <div class="lang-options" id="filterYear" style="padding:0;"></div>
+    </div>
+    <button class="btn-ghost" style="width:100%; justify-content:center; margin-top:4px;" onclick="clearFilters()" data-i18n="filter.clear">Filtrləri təmizlə</button>
   </div>
   <div id="publicLibraryList" style="padding:0 18px;"></div>
 </div>
@@ -541,11 +574,21 @@
   </div>
 
   <div class="admin-tabs">
-    <button class="admin-tab active" data-tab="add" onclick="switchAdminTab('add')" data-i18n="admin.tab.add">Anime əlavə et</button>
+    <button class="admin-tab active" data-tab="dashboard" onclick="switchAdminTab('dashboard')" data-i18n="admin.tab.dashboard">Dashboard</button>
+    <button class="admin-tab" data-tab="add" onclick="switchAdminTab('add')" data-i18n="admin.tab.add">Anime əlavə et</button>
     <button class="admin-tab" data-tab="seasons" onclick="switchAdminTab('seasons')" data-i18n="admin.tab.seasons">Sezonlar</button>
     <button class="admin-tab" data-tab="categories" onclick="switchAdminTab('categories')" data-i18n="admin.tab.categories">Kateqoriyalar</button>
     <button class="admin-tab" data-tab="manage" onclick="switchAdminTab('manage')" data-i18n="admin.tab.manage">İdarəetmə</button>
     <button class="admin-tab" data-tab="system" onclick="switchAdminTab('system')" data-i18n="admin.tab.system">Sistem</button>
+  </div>
+
+  <!-- TAB: Dashboard -->
+  <div id="adminTab-dashboard" class="admin-tab-panel">
+    <div class="stats-grid" style="padding:0 18px; margin-top:8px;" id="dashboardStats"></div>
+    <div style="padding:0 18px;">
+      <div class="settings-label" style="margin-bottom:8px;" data-i18n="admin.dash.contentCheck">İçerik kontrolü</div>
+      <div id="contentCheckList"></div>
+    </div>
   </div>
 
   <!-- TAB: Add anime -->
@@ -681,6 +724,18 @@
 </div>
 
 
+<!-- ============ STATS PAGE ============ -->
+<div id="page-stats" class="page hidden">
+  <div class="topbar">
+    <button class="icon-btn" onclick="goPage('settings')">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="brand" style="font-size:15px" data-i18n="stats.title">Statistika</div>
+    <div style="width:38px"></div>
+  </div>
+  <div id="statsContent" style="padding:16px 18px;"></div>
+</div>
+
 <!-- ============ SETTINGS PAGE ============ -->
 <div id="page-settings" class="page hidden">
   <div class="topbar">
@@ -711,6 +766,10 @@
           <div class="settings-row-sub" data-i18n="settings.listsPublicSub">Digər istifadəçilər sənin izləmə statuslarını görə bilsin</div>
         </div>
         <div class="toggle" id="toggleListsPublic" onclick="toggleListsPublic()"><div class="toggle-knob"></div></div>
+      </div>
+      <div class="settings-row hidden" id="statsLinkRow" onclick="goPage('stats')" style="cursor:pointer;">
+        <div class="settings-row-label" data-i18n="settings.myStats">Anime statistikam</div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.4"><path d="M9 18l6-6-6-6"/></svg>
       </div>
     </div>
   </div>
@@ -841,7 +900,8 @@ const I18N = {
     "library.title":"Kitabxana","detail.watch":"İzlə","detail.episodes":"Bölümlər","detail.similar":"Bunu izləyənlər bunları da izlədi",
     "player.title":"Oynadıcı","player.noSource":"Video mənbəyi hələ bağlanmayıb.<br>Öz videonu əlavə edəndə burda oynayacaq.",
     "admin.title":"Admin Panel","admin.searchPlaceholder":"AniList-də axtar (məs: Naruto)...",
-    "admin.tab.add":"Anime əlavə et","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kateqoriyalar","admin.tab.manage":"İdarəetmə","admin.tab.system":"Sistem",
+    "admin.tab.dashboard":"Dashboard","admin.tab.add":"Anime əlavə et","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kateqoriyalar","admin.tab.manage":"İdarəetmə","admin.tab.system":"Sistem",
+    "admin.dash.totalAnime":"Toplam anime","admin.dash.totalEpisodes":"Toplam bölüm","admin.dash.missingVideo":"Eksik video","admin.dash.missingSubtitle":"Eksik altyazı","admin.dash.contentCheck":"İçerik kontrolü",
     "admin.cat.hint":"Ana səhifədə görünəcək kateqoriyaları yarat və idarə et.","admin.cat.new":"Yeni kateqoriya",
     "admin.cat.nameAz":"Ad (Azərbaycanca)","admin.cat.nameTr":"Ad (Türkçe)","admin.cat.nameEn":"Name (English)",
     "admin.cat.cancel":"Ləğv et","admin.cat.create":"Yarat",
@@ -858,6 +918,8 @@ const I18N = {
     "settings.language":"Dil","settings.theme":"Görünüş","settings.playback":"Oxutma","settings.account":"Hesab",
     "settings.changeUsername":"İstifadəçi adını dəyiş","settings.save":"Saxla",
     "settings.listsPublic":"Siyahılarım görünsün","settings.listsPublicSub":"Digər istifadəçilər sənin izləmə statuslarını görə bilsin",
+    "settings.myStats":"Anime statistikam","stats.title":"Statistika",
+    "filter.genre":"Janr","filter.status":"Status","filter.format":"Format","filter.year":"İl","filter.clear":"Filtrləri təmizlə",
     "auth.title":"Hesab","auth.username":"İstifadəçi adı","auth.email":"E-poçt","auth.password":"Şifrə",
     "auth.signup":"Hesab yarat","auth.toggleToSignin":"Artıq hesabın var? Giriş et",
     "settings.autoplay":"Avtomatik növbəti bölüm","settings.autoplaySub":"Bölüm bitəndə növbətini başlat",
@@ -875,7 +937,8 @@ const I18N = {
     "library.title":"Kitaplık","detail.watch":"İzle","detail.episodes":"Bölümler","detail.similar":"Bunu izleyenler şunları da izledi",
     "player.title":"Oynatıcı","player.noSource":"Video kaynağı henüz bağlanmadı.<br>Kendi videonu ekleyince burada oynayacak.",
     "admin.title":"Admin Panel","admin.searchPlaceholder":"AniList'te ara (örn: Naruto)...",
-    "admin.tab.add":"Anime ekle","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kategoriler","admin.tab.manage":"Yönetim","admin.tab.system":"Sistem",
+    "admin.tab.dashboard":"Dashboard","admin.tab.add":"Anime ekle","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kategoriler","admin.tab.manage":"Yönetim","admin.tab.system":"Sistem",
+    "admin.dash.totalAnime":"Toplam anime","admin.dash.totalEpisodes":"Toplam bölüm","admin.dash.missingVideo":"Eksik video","admin.dash.missingSubtitle":"Eksik altyazı","admin.dash.contentCheck":"İçerik kontrolü",
     "admin.cat.hint":"Ana sayfada görünecek kategorileri oluştur ve yönet.","admin.cat.new":"Yeni kategori",
     "admin.cat.nameAz":"İsim (Azərbaycanca)","admin.cat.nameTr":"İsim (Türkçe)","admin.cat.nameEn":"İsim (English)",
     "admin.cat.cancel":"Vazgeç","admin.cat.create":"Oluştur",
@@ -892,6 +955,8 @@ const I18N = {
     "settings.language":"Dil","settings.theme":"Görünüm","settings.playback":"Oynatma","settings.account":"Hesap",
     "settings.changeUsername":"Kullanıcı adını değiştir","settings.save":"Kaydet",
     "settings.listsPublic":"Listelerim görünsün","settings.listsPublicSub":"Diğer kullanıcılar izleme durumlarını görebilsin",
+    "settings.myStats":"Anime istatistiklerim","stats.title":"İstatistikler",
+    "filter.genre":"Tür","filter.status":"Durum","filter.format":"Format","filter.year":"Yıl","filter.clear":"Filtreleri temizle",
     "auth.title":"Hesap","auth.username":"Kullanıcı adı","auth.email":"E-posta","auth.password":"Şifre",
     "auth.signup":"Hesap oluştur","auth.toggleToSignin":"Zaten hesabın var mı? Giriş yap",
     "settings.autoplay":"Otomatik sonraki bölüm","settings.autoplaySub":"Bölüm bitince sonrakini başlat",
@@ -909,7 +974,8 @@ const I18N = {
     "library.title":"Library","detail.watch":"Watch","detail.episodes":"Episodes","detail.similar":"People who watched this also watched",
     "player.title":"Player","player.noSource":"Video source not connected yet.<br>It will play here once you add your own video.",
     "admin.title":"Admin Panel","admin.searchPlaceholder":"Search AniList (e.g. Naruto)...",
-    "admin.tab.add":"Add anime","admin.tab.seasons":"Seasons","admin.tab.categories":"Categories","admin.tab.manage":"Manage","admin.tab.system":"System",
+    "admin.tab.dashboard":"Dashboard","admin.tab.add":"Add anime","admin.tab.seasons":"Seasons","admin.tab.categories":"Categories","admin.tab.manage":"Manage","admin.tab.system":"System",
+    "admin.dash.totalAnime":"Total anime","admin.dash.totalEpisodes":"Total episodes","admin.dash.missingVideo":"Missing video","admin.dash.missingSubtitle":"Missing subtitle","admin.dash.contentCheck":"Content check",
     "admin.cat.hint":"Create and manage categories shown on the home page.","admin.cat.new":"New category",
     "admin.cat.nameAz":"Name (Azərbaycanca)","admin.cat.nameTr":"Name (Türkçe)","admin.cat.nameEn":"Name (English)",
     "admin.cat.cancel":"Cancel","admin.cat.create":"Create",
@@ -926,6 +992,8 @@ const I18N = {
     "settings.language":"Language","settings.theme":"Appearance","settings.playback":"Playback","settings.account":"Account",
     "settings.changeUsername":"Change username","settings.save":"Save",
     "settings.listsPublic":"Show my lists","settings.listsPublicSub":"Let other users see your watch statuses",
+    "settings.myStats":"My anime stats","stats.title":"Statistics",
+    "filter.genre":"Genre","filter.status":"Status","filter.format":"Format","filter.year":"Year","filter.clear":"Clear filters",
     "auth.title":"Account","auth.username":"Username","auth.email":"Email","auth.password":"Password",
     "auth.signup":"Create account","auth.toggleToSignin":"Already have an account? Sign in",
     "settings.autoplay":"Autoplay next episode","settings.autoplaySub":"Start the next episode automatically",
@@ -1022,12 +1090,16 @@ function updateAccountUI(){
       privacyWrap.classList.remove('hidden');
       document.getElementById('toggleListsPublic').classList.toggle('on', state.listsPublic !== false);
     }
+    const statsRow = document.getElementById('statsLinkRow');
+    if(statsRow) statsRow.classList.remove('hidden');
   } else {
     wrap.innerHTML = `<div class="settings-row-sub">${state.lang==='en'?'Not signed in':(state.lang==='tr'?'Giriş yapılmadı':'Giriş edilməyib')}</div>`;
     document.getElementById('accountAuthBtn').textContent = state.lang==='en'?'Sign in':(state.lang==='tr'?'Giriş yap':'Giriş et');
     document.getElementById('accountAuthBtn').onclick = ()=> goPage('auth');
     if(renameWrap) renameWrap.classList.add('hidden');
     if(privacyWrap) privacyWrap.classList.add('hidden');
+    const statsRow2 = document.getElementById('statsLinkRow');
+    if(statsRow2) statsRow2.classList.add('hidden');
   }
 }
 
@@ -1393,6 +1465,7 @@ async function anilistSearch(query){
           seasonYear
           averageScore
           status
+          format
           studios(isMain:true){ nodes{ name } }
           nextAiringEpisode{ episode }
           relations{
@@ -1420,7 +1493,7 @@ async function anilistById(id){
     query ($id: Int) {
       Media(id:$id, type: ANIME){
         id title{ romaji english native } coverImage{ large color } bannerImage
-        description(asHtml:false) episodes genres seasonYear averageScore status studios(isMain:true){ nodes{ name } }
+        description(asHtml:false) episodes genres seasonYear averageScore status format studios(isMain:true){ nodes{ name } }
         nextAiringEpisode{ episode }
         relations{ edges{ relationType node{ id type format title{ romaji english native } coverImage{ large } episodes seasonYear } } }
         recommendations(sort: RATING_DESC, perPage: 8){ nodes{ mediaRecommendation{ id title{ romaji english } coverImage{ large } averageScore } } }
@@ -1440,7 +1513,7 @@ async function anilistTrending(){
       Page(page:1, perPage:12){
         media(type: ANIME, sort: TRENDING_DESC){
           id title{ romaji english native } coverImage{ large color } bannerImage
-          description(asHtml:false) episodes genres seasonYear averageScore status studios(isMain:true){ nodes{ name } }
+          description(asHtml:false) episodes genres seasonYear averageScore status format studios(isMain:true){ nodes{ name } }
           nextAiringEpisode{ episode }
           relations{
             edges{
@@ -1581,6 +1654,7 @@ function switchAdminTab(tab){
   document.getElementById('adminTab-'+tab).classList.remove('hidden');
   hideSeasonConfirmBar();
 
+  if(tab==='dashboard') renderAdminDashboard();
   if(tab==='add' && document.getElementById('adminSearchInput').value.trim()==='') renderAdminTrending();
   if(tab==='seasons') renderSeasonBaseList();
   if(tab==='categories') renderCategoryList();
@@ -1726,6 +1800,60 @@ function removeCatAnime(catId, animeId){
   saveCategories();
   renderCategoryList();
   renderHome();
+}
+
+// ================= ADMIN DASHBOARD =================
+// Gives the admin an at-a-glance CMS view: totals, and exactly which
+// episodes are still missing a video or subtitle link.
+function renderAdminDashboard(){
+  const allAnime = []; // flattened: base entries + every linked season
+  state.library.forEach(base=>{
+    allAnime.push(base);
+    (base.seasons||[]).forEach(s=> allAnime.push(s));
+  });
+
+  let totalEpisodes = 0, missingVideo = 0, missingSubtitle = 0;
+
+  allAnime.forEach(m=>{
+    const total = getEpisodeTotal(m);
+    totalEpisodes += total;
+    for(let i=1;i<=total;i++){
+      const src = m.episodeSources && m.episodeSources[i];
+      if(!src || !src.video) missingVideo++;
+      if(!src || !src.subtitle) missingSubtitle++;
+    }
+  });
+
+  document.getElementById('dashboardStats').innerHTML = `
+    <div class="stat-card"><div class="stat-card-value">${state.library.length}</div><div class="stat-card-label" data-i18n="admin.dash.totalAnime">Toplam anime</div></div>
+    <div class="stat-card"><div class="stat-card-value">${totalEpisodes}</div><div class="stat-card-label" data-i18n="admin.dash.totalEpisodes">Toplam bölüm</div></div>
+    <div class="stat-card"><div class="stat-card-value" style="color:var(--danger);">${missingVideo}</div><div class="stat-card-label" data-i18n="admin.dash.missingVideo">Eksik video</div></div>
+    <div class="stat-card"><div class="stat-card-value" style="color:var(--danger);">${missingSubtitle}</div><div class="stat-card-label" data-i18n="admin.dash.missingSubtitle">Eksik altyazı</div></div>`;
+
+  // Content checklist: one row per anime (base or season) with a per-episode
+  // video/subtitle dot strip (green=both, yellow=video only, red=neither).
+  const wrap = document.getElementById('contentCheckList');
+  if(allAnime.length === 0){
+    wrap.innerHTML = `<div class="empty-row">${t('row.libraryEmpty')}</div>`;
+    return;
+  }
+  wrap.innerHTML = allAnime.map(m=>{
+    const title = m.title.english || m.title.romaji;
+    const total = getEpisodeTotal(m);
+    const dots = Array.from({length: Math.min(total,50)}, (_,idx)=>{
+      const ep = idx+1;
+      const src = m.episodeSources && m.episodeSources[ep];
+      const hasVideo = src && src.video;
+      const hasSub = src && src.subtitle;
+      const color = hasVideo && hasSub ? '#6FBF8B' : hasVideo ? '#E8B84B' : '#E2604F';
+      return `<span title="Ep ${ep}" style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></span>`;
+    }).join('');
+    return `
+    <div class="settings-card" style="padding:12px 14px; margin-bottom:8px;">
+      <div style="font-size:12.5px; font-weight:700; margin-bottom:8px;">${title} <span style="color:var(--text-dim); font-weight:600;">(${total} ${t('admin.eps')})</span></div>
+      <div style="display:flex; flex-wrap:wrap; gap:4px;">${dots}</div>
+    </div>`;
+  }).join('');
 }
 
 function updateSystemTab(){
@@ -2209,13 +2337,76 @@ function renderSearch(){
 }
 
 // Public-facing library list (no admin controls, view + tap-to-watch only)
+// ================= LIBRARY FILTERS =================
+let activeFilters = { genre:null, status:null, format:null, year:null };
+
+function toggleFilterPanel(){
+  const panel = document.getElementById('filterPanel');
+  panel.classList.toggle('hidden');
+  if(!panel.classList.contains('hidden')) renderFilterOptions();
+}
+
+function renderFilterOptions(){
+  const genres = new Set(), formats = new Set(), years = new Set(), statuses = new Set();
+  state.library.forEach(m=>{
+    (m.genres||[]).forEach(g=>genres.add(g));
+    if(m.format) formats.add(m.format);
+    if(m.seasonYear) years.add(m.seasonYear);
+    if(m.status) statuses.add(m.status);
+  });
+  const statusLabels = { RELEASING: state.lang==='en'?'Airing':(state.lang==='tr'?'Devam ediyor':'Davam edir'), FINISHED: state.lang==='en'?'Finished':(state.lang==='tr'?'Tamamlandı':'Tamamlandı'), NOT_YET_RELEASED: state.lang==='en'?'Upcoming':(state.lang==='tr'?'Yakında':'Tezliklə') };
+
+  const pill = (val, active, label, onClick) => `<button class="option-pill ${active?'active':''}" style="flex-shrink:0;" onclick="${onClick}">${label}</button>`;
+
+  document.getElementById('filterGenre').innerHTML = [...genres].sort().map(g=>
+    pill(g, activeFilters.genre===g, g, `setFilter('genre', ${activeFilters.genre===g?'null':`'${g}'`})`)
+  ).join('') || `<span style="color:var(--text-dim); font-size:12px;">—</span>`;
+
+  document.getElementById('filterStatus').innerHTML = [...statuses].map(s=>
+    pill(s, activeFilters.status===s, statusLabels[s]||s, `setFilter('status', ${activeFilters.status===s?'null':`'${s}'`})`)
+  ).join('') || `<span style="color:var(--text-dim); font-size:12px;">—</span>`;
+
+  document.getElementById('filterFormat').innerHTML = [...formats].map(f=>
+    pill(f, activeFilters.format===f, f, `setFilter('format', ${activeFilters.format===f?'null':`'${f}'`})`)
+  ).join('') || `<span style="color:var(--text-dim); font-size:12px;">—</span>`;
+
+  document.getElementById('filterYear').innerHTML = [...years].sort((a,b)=>b-a).map(y=>
+    pill(y, activeFilters.year===y, y, `setFilter('year', ${activeFilters.year===y?'null':y})`)
+  ).join('') || `<span style="color:var(--text-dim); font-size:12px;">—</span>`;
+}
+
+function setFilter(key, value){
+  activeFilters[key] = value;
+  renderFilterOptions();
+  renderPublicLibrary();
+}
+function clearFilters(){
+  activeFilters = { genre:null, status:null, format:null, year:null };
+  renderFilterOptions();
+  renderPublicLibrary();
+}
+function applyFilters(list){
+  return list.filter(m=>{
+    if(activeFilters.genre && !(m.genres||[]).includes(activeFilters.genre)) return false;
+    if(activeFilters.status && m.status !== activeFilters.status) return false;
+    if(activeFilters.format && m.format !== activeFilters.format) return false;
+    if(activeFilters.year && m.seasonYear !== activeFilters.year) return false;
+    return true;
+  });
+}
+
 function renderPublicLibrary(){
   const wrap = document.getElementById('publicLibraryList');
+  const filtered = applyFilters(state.library);
   if(state.library.length===0){
     wrap.innerHTML = `<div class="empty-row" style="margin:16px 0 0">${t('row.libraryEmpty')}</div>`;
     return;
   }
-  wrap.innerHTML = state.library.map(m=>{
+  if(filtered.length===0){
+    wrap.innerHTML = `<div class="empty-row" style="margin:16px 0 0">${t('empty.noResults')}</div>`;
+    return;
+  }
+  wrap.innerHTML = filtered.map(m=>{
     const title = m.title.english || m.title.romaji;
     const cover = m.coverImage ? m.coverImage.large : '';
     const seasons = m.seasons || [];
@@ -2378,6 +2569,99 @@ function openDetail(id, base){
   }
   epList.innerHTML = html;
   goPage('detail');
+}
+
+// Renders "similar anime" from AniList's own recommendations for this title —
+// discovery beyond just what's already in the library, as requested.
+// ================= USER STATS =================
+// Computed entirely client-side from data already loaded (episodeProgress,
+// animeStatuses, library) — nothing extra stored in Supabase for this, so it
+// costs zero additional database space as requested.
+function computeUserStats(){
+  const watchedEntries = Object.keys(state.episodeProgress).filter(k => state.episodeProgress[k]);
+  const totalEpisodes = watchedEntries.length;
+
+  // Which base anime have at least one watched episode, or a status set.
+  const touchedAnimeIds = new Set();
+  watchedEntries.forEach(k => touchedAnimeIds.add(parseInt(k.split(':')[0])));
+  Object.keys(state.animeStatuses).forEach(id => touchedAnimeIds.add(parseInt(id)));
+
+  const genreCounts = {}, studioCounts = {};
+  let scoreSum = 0, scoreCount = 0;
+  let totalMinutes = 0;
+
+  function findAnimeById(id){
+    for(const base of state.library){
+      if(base.id === id) return base;
+      const s = (base.seasons||[]).find(x=>x.id===id);
+      if(s) return s;
+    }
+    return null;
+  }
+
+  touchedAnimeIds.forEach(id=>{
+    const anime = findAnimeById(id);
+    if(!anime) return;
+    (anime.genres||[]).forEach(g => genreCounts[g] = (genreCounts[g]||0) + 1);
+    const studio = anime.studios?.nodes?.[0]?.name;
+    if(studio) studioCounts[studio] = (studioCounts[studio]||0) + 1;
+    if(anime.averageScore){ scoreSum += anime.averageScore; scoreCount++; }
+  });
+
+  // Rough runtime estimate: 24 min/episode is the anime industry standard,
+  // used only because AniList doesn't expose per-episode duration on the fields we fetch.
+  totalMinutes = totalEpisodes * 24;
+
+  const topGenre = Object.entries(genreCounts).sort((a,b)=>b[1]-a[1])[0];
+  const topStudio = Object.entries(studioCounts).sort((a,b)=>b[1]-a[1])[0];
+
+  const now = Date.now();
+  const monthAgo = now - 30*24*60*60*1000;
+  const thisMonthMinutes = state.watchHistory
+    .filter(h => h.timestamp >= monthAgo)
+    .length * 24; // rough: counts distinct in-progress entries touched this month
+
+  return {
+    totalAnime: touchedAnimeIds.size,
+    totalEpisodes,
+    totalMinutes,
+    topGenre: topGenre ? topGenre[0] : '—',
+    topStudio: topStudio ? topStudio[0] : '—',
+    avgScore: scoreCount ? (scoreSum/scoreCount/10).toFixed(1) : '—',
+    thisMonthMinutes
+  };
+}
+
+function formatMinutes(mins){
+  const h = Math.floor(mins/60);
+  const m = mins % 60;
+  if(h === 0) return m + (state.lang==='en'?'m':(state.lang==='tr'?'dk':'dəq'));
+  return h + (state.lang==='en'?'h ':(state.lang==='tr'?'sa ':'saat ')) + m + (state.lang==='en'?'m':(state.lang==='tr'?'dk':'dəq'));
+}
+
+function renderStatsPage(){
+  const wrap = document.getElementById('statsContent');
+  if(!currentUser){
+    wrap.innerHTML = `<div class="empty-row">${state.lang==='en'?'Sign in to see your stats':(state.lang==='tr'?'İstatistiklerini görmek için giriş yap':'Statistikanı görmək üçün giriş et')}</div>`;
+    return;
+  }
+  const s = computeUserStats();
+  const name = currentUser.user_metadata?.username || currentUser.email;
+  const heading = state.lang==='en' ? `${name}'s Anime Stats` : (state.lang==='tr' ? `${name}'nin Anime İstatistikleri` : `${name} Anime Statistikası`);
+
+  wrap.innerHTML = `
+    <div style="font-size:16px; font-weight:800; margin-bottom:16px;">${heading}</div>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-card-value">${s.totalAnime}</div><div class="stat-card-label">${state.lang==='en'?'Total anime':(state.lang==='tr'?'Toplam anime':'Ümumi anime')}</div></div>
+      <div class="stat-card"><div class="stat-card-value">${s.totalEpisodes}</div><div class="stat-card-label">${state.lang==='en'?'Total episodes':(state.lang==='tr'?'Toplam bölüm':'Ümumi bölüm')}</div></div>
+      <div class="stat-card"><div class="stat-card-value">${formatMinutes(s.totalMinutes)}</div><div class="stat-card-label">${state.lang==='en'?'Total watch time':(state.lang==='tr'?'Toplam izleme süresi':'Ümumi izləmə vaxtı')}</div></div>
+      <div class="stat-card"><div class="stat-card-value">${s.avgScore}</div><div class="stat-card-label">${state.lang==='en'?'Avg. score':(state.lang==='tr'?'Ortalama puan':'Orta bal')}</div></div>
+    </div>
+    <div class="settings-card" style="margin-bottom:16px;">
+      <div class="stat-list-row" style="padding:12px 16px;"><span>${state.lang==='en'?'Top genre':(state.lang==='tr'?'En çok izlenen tür':'Ən çox baxılan janr')}</span><b>${s.topGenre}</b></div>
+      <div class="stat-list-row" style="padding:12px 16px;"><span>${state.lang==='en'?'Top studio':(state.lang==='tr'?'En çok izlenen stüdyo':'Ən çox baxılan studiya')}</span><b>${s.topStudio}</b></div>
+      <div class="stat-list-row" style="padding:12px 16px;"><span>${state.lang==='en'?'This month':(state.lang==='tr'?'Bu ay':'Bu ay')}</span><b>${formatMinutes(s.thisMonthMinutes)}</b></div>
+    </div>`;
 }
 
 // Renders "similar anime" from AniList's own recommendations for this title —
@@ -3014,8 +3298,9 @@ function goPage(name){
   if(name === 'search') renderSearch();
   if(name === 'library') renderPublicLibrary();
   if(name === 'settings') updateAccountUI();
+  if(name === 'stats') renderStatsPage();
   if(name === 'admin'){
-    switchAdminTab('add');
+    switchAdminTab('dashboard');
   }
   if(name !== 'admin') hideSeasonConfirmBar();
 
