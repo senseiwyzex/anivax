@@ -8,47 +8,50 @@
   @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Sora:wght@600;700;800&display=swap');
 
   :root{
-    --bg: #0A0C12;
-    --bg-elevated: #12151E;
-    --card: #171A24;
-    --accent: #E8B84B;
-    --accent-dim: #a3862f;
-    --text: #F2F1EC;
-    --text-dim: #8B8F9C;
-    --line: rgba(255,255,255,0.07);
-    --danger: #E2604F;
-    --success: #6FBF8B;
-    --shadow-sm: 0 2px 8px rgba(0,0,0,0.22);
-    --shadow-md: 0 8px 24px rgba(0,0,0,0.32);
-    --shadow-glow: 0 0 24px rgba(232,184,75,0.15);
+    --bg: #06070D;
+    --bg-elevated: #10121C;
+    --card: #151827;
+    --accent: #6C8CFF;
+    --accent-dim: #4A5FC7;
+    --accent-2: #B98CFF;
+    --text: #F3F4FA;
+    --text-dim: #8B8FA8;
+    --line: rgba(255,255,255,0.08);
+    --danger: #FF5C7A;
+    --success: #4ADE9E;
+    --shadow-sm: 0 2px 8px rgba(0,0,0,0.25);
+    --shadow-md: 0 10px 28px rgba(0,0,0,0.38);
+    --shadow-glow: 0 0 28px rgba(108,140,255,0.22);
     --radius-card: 16px;
     --radius-pill: 12px;
   }
   [data-theme="light"]{
-    --bg: #F7F5F0;
+    --bg: #F5F6FB;
     --bg-elevated: #FFFFFF;
     --card: #FFFFFF;
-    --accent: #C9932E;
-    --accent-dim: #a3862f;
-    --text: #1A1B1F;
-    --text-dim: #6B6E78;
-    --line: rgba(0,0,0,0.08);
-    --shadow-sm: 0 2px 8px rgba(0,0,0,0.07);
-    --shadow-md: 0 8px 24px rgba(0,0,0,0.1);
-    --shadow-glow: 0 0 24px rgba(201,147,46,0.12);
+    --accent: #4A5FE8;
+    --accent-dim: #3648B8;
+    --accent-2: #8B5FE0;
+    --text: #14152A;
+    --text-dim: #6B6E85;
+    --line: rgba(20,21,42,0.08);
+    --shadow-sm: 0 2px 8px rgba(20,21,42,0.06);
+    --shadow-md: 0 10px 28px rgba(20,21,42,0.09);
+    --shadow-glow: 0 0 28px rgba(74,95,232,0.14);
   }
   [data-theme="midnight"]{
-    --bg: #05060A;
-    --bg-elevated: #0D0F16;
-    --card: #10121A;
-    --accent: #7C9CFF;
-    --accent-dim: #4E5FA3;
-    --text: #EDEEF5;
-    --text-dim: #767A8C;
-    --line: rgba(124,156,255,0.12);
-    --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
-    --shadow-md: 0 8px 24px rgba(0,0,0,0.4);
-    --shadow-glow: 0 0 24px rgba(124,156,255,0.18);
+    --bg: #030308;
+    --bg-elevated: #0A0B14;
+    --card: #0E101B;
+    --accent: #8CA8FF;
+    --accent-dim: #5A72CC;
+    --accent-2: #C9A8FF;
+    --text: #EEEFF7;
+    --text-dim: #767A94;
+    --line: rgba(140,168,255,0.14);
+    --shadow-sm: 0 2px 8px rgba(0,0,0,0.35);
+    --shadow-md: 0 10px 28px rgba(0,0,0,0.45);
+    --shadow-glow: 0 0 28px rgba(140,168,255,0.24);
   }
 
   *{ margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
@@ -69,8 +72,7 @@
     position: sticky; top:0; z-index: 50;
     display:flex; align-items:center; justify-content:space-between;
     padding: 16px 18px 10px;
-    background: linear-gradient(to bottom, var(--bg) 60%, transparent);
-    backdrop-filter: blur(6px);
+    background: linear-gradient(to bottom, var(--bg) 75%, transparent);
   }
   .brand{ font-weight:800; font-size:21px; letter-spacing: -0.03em; display:flex; align-items:center; gap:8px; }
   .brand .dot{ width:8px; height:8px; border-radius:50%; background:var(--accent); box-shadow:0 0 14px var(--accent); }
@@ -104,7 +106,7 @@
   .hero-img{ position:absolute; inset:0; background-size:cover; background-position:center 20%; }
   .hero::before{
     content:''; position:absolute; inset:0;
-    background: radial-gradient(circle at 80% 20%, rgba(232,184,75,0.18), transparent 55%), linear-gradient(to top, rgba(0,0,0,0.88) 15%, rgba(0,0,0,0.15) 75%);
+    background: radial-gradient(circle at 80% 20%, rgba(108,140,255,0.2), transparent 55%), linear-gradient(to top, rgba(0,0,0,0.88) 15%, rgba(0,0,0,0.15) 75%);
   }
   .hero-content{ position:relative; padding: 18px 20px; width:100%; }
   .hero-eyebrow{ font-size:11px; font-weight:700; color:var(--accent); letter-spacing:0.12em; text-transform:uppercase; margin-bottom:6px; }
@@ -165,18 +167,42 @@
     background-size: cover; background-position:center; display:flex; align-items:center; justify-content:center; overflow:hidden;
   }
   .card-poster::after{ content:''; position:absolute; inset:0; background: linear-gradient(to top, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.1) 35%, transparent 60%); pointer-events:none; }
-  .card-badge{ position:absolute; top:7px; left:7px; z-index:1; background: rgba(0,0,0,0.72); backdrop-filter: blur(4px); font-size:10px; font-weight:700; padding:4px 7px; border-radius:7px; color: var(--accent); }
-  .card-score{ position:absolute; top:7px; right:7px; z-index:1; background: rgba(0,0,0,0.72); backdrop-filter: blur(4px); font-size:10px; font-weight:700; padding:4px 7px; border-radius:7px; color:#FFD25A; display:flex; align-items:center; gap:2px; }
+  .card-badge{ position:absolute; top:7px; left:7px; z-index:1; background: rgba(8,9,14,0.88); font-size:10px; font-weight:700; padding:4px 7px; border-radius:7px; color: var(--accent); }
+  .card-score{ position:absolute; top:7px; right:7px; z-index:1; background: rgba(8,9,14,0.88); font-size:10px; font-weight:700; padding:4px 7px; border-radius:7px; color:#FFD25A; display:flex; align-items:center; gap:2px; }
   .card-info{ padding: 10px 11px 12px; }
   .card-name{ font-size:12.5px; font-weight:700; line-height:1.32; letter-spacing:-0.01em; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .card-meta{ font-size:10.5px; color:var(--text-dim); margin-top:5px; font-weight:600; }
 
   .empty-row{ margin: 0 18px; padding: 22px 18px; border: 1px dashed var(--line); border-radius:16px; color: var(--text-dim); font-size:13px; font-weight:600; text-align:center; }
-  .loading-row{ margin:0 18px; padding:22px 18px; text-align:center; color:var(--text-dim); font-size:13px; font-weight:600; }
+  .loading-row{ margin:0 18px; padding:22px 18px; text-align:center; color:var(--text-dim); font-size:13px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:8px; }
+  .spinner{ width:16px; height:16px; border-radius:50%; border:2px solid var(--line); border-top-color:var(--accent); animation: spin 0.7s linear infinite; flex-shrink:0; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .empty-row{ position:relative; overflow:hidden; }
+  .empty-row-icon{ font-size:22px; margin-bottom:6px; display:block; opacity:0.6; }
+
+  /* ---------- AUTH SCREEN ---------- */
+  .auth-hero-icon{
+    width:56px; height:56px; border-radius:18px; margin:0 auto 22px;
+    display:flex; align-items:center; justify-content:center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color:#fff;
+    box-shadow: var(--shadow-glow);
+    animation: authIconIn .4s cubic-bezier(.2,.8,.2,1);
+  }
+  @keyframes authIconIn{ from{ opacity:0; transform: scale(0.7) rotate(-8deg); } to{ opacity:1; transform: scale(1) rotate(0); } }
+  .auth-field{ animation: authFieldIn .35s cubic-bezier(.2,.8,.2,1) backwards; }
+  @keyframes authFieldIn{ from{ opacity:0; transform: translateY(10px); } to{ opacity:1; transform: translateY(0); } }
+  .auth-input{
+    width:100%; background:var(--bg-elevated); border:1px solid var(--line); border-radius:13px;
+    padding:14px 16px; color:var(--text); font-size:14px; outline:none; transition: border-color .15s ease;
+  }
+  .auth-input:focus{ border-color: var(--accent); }
+  .auth-error{ color:var(--danger); font-size:12.5px; font-weight:700; margin-top:12px; display:none; }
+  .auth-error.show{ display:block; animation: shake .35s ease; }
+  @keyframes shake{ 0%,100%{ transform:translateX(0); } 20%{ transform:translateX(-6px); } 40%{ transform:translateX(6px); } 60%{ transform:translateX(-4px); } 80%{ transform:translateX(4px); } }
 
   .bottom-nav{
     position: fixed; bottom:0; left:0; right:0; z-index:50; display:flex; justify-content:space-around;
-    background: var(--bg); background: color-mix(in srgb, var(--bg) 96%, transparent); backdrop-filter: blur(6px);
+    background: color-mix(in srgb, var(--bg) 97%, transparent);
     border-top:1px solid var(--line); padding: 10px 8px calc(10px + env(safe-area-inset-bottom));
     box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
   }
@@ -190,7 +216,7 @@
 
   .detail-hero{ position:relative; height:280px; background: linear-gradient(150deg, #232838, #0e1018); background-size:cover; background-position:center 20%; display:flex; align-items:flex-end; }
   .detail-hero::before{ content:''; position:absolute; inset:0; background: linear-gradient(to top, var(--bg) 5%, rgba(10,12,18,0.25) 60%); }
-  .detail-back{ position:absolute; top:16px; left:16px; z-index:5; width:36px; height:36px; border-radius:11px; background: rgba(0,0,0,0.45); backdrop-filter: blur(6px); display:flex; align-items:center; justify-content:center; }
+  .detail-back{ position:absolute; top:16px; left:16px; z-index:5; width:36px; height:36px; border-radius:11px; background: rgba(8,9,14,0.65); display:flex; align-items:center; justify-content:center; }
   .detail-body{ padding: 16px 18px 0; position:relative; }
   .detail-title{ font-size:22px; font-weight:800; margin-bottom:8px; }
   .detail-tags{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
@@ -405,7 +431,7 @@
       <div class="row-title" data-i18n="row.library">Kitabxana</div>
       <div class="row-sub" onclick="goPage('library')"><span data-i18n="row.all">hamısı</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
     </div>
-    <div id="row-library"><div class="empty-row" id="libraryEmpty" data-i18n="row.libraryEmpty">Kitabxana boşdur. Admin paneldən anime əlavə et.</div></div>
+    <div id="row-library"><div class="empty-row" id="libraryEmpty"><span class="empty-row-icon">📺</span><span data-i18n="row.libraryEmpty">Kitabxana boşdur. Admin paneldən anime əlavə et.</span></div></div>
   </div>
 
   <div id="categoryRows"></div>
@@ -564,14 +590,23 @@
     <div class="brand" style="font-size:16px" data-i18n="auth.title">Hesab</div>
     <div style="width:38px"></div>
   </div>
-  <div style="padding:20px 24px;">
-    <div id="authUsernameRow" style="margin-bottom:12px;">
-      <input type="text" id="authUsername" data-i18n-placeholder="auth.username" placeholder="İstifadəçi adı" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:13px;padding:14px 16px;color:var(--text);font-size:14px;outline:none;">
+  <div style="padding:24px 24px 20px;">
+    <div class="auth-hero-icon">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
     </div>
-    <input type="email" id="authEmail" data-i18n-placeholder="auth.email" placeholder="E-poçt" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:13px;padding:14px 16px;color:var(--text);font-size:14px;outline:none;margin-bottom:12px;">
-    <input type="password" id="authPassword" data-i18n-placeholder="auth.password" placeholder="Şifrə" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:13px;padding:14px 16px;color:var(--text);font-size:14px;outline:none;margin-bottom:16px;">
-    <button class="btn-primary" id="authSubmitBtn" style="width:100%;padding:14px;" onclick="signUp()" data-i18n="auth.signup">Hesab yarat</button>
-    <div id="authError" style="color:var(--danger);font-size:12.5px;font-weight:700;margin-top:12px;display:none;"></div>
+    <div id="authUsernameRow" class="auth-field" style="margin-bottom:12px; animation-delay:.05s;">
+      <input type="text" id="authUsername" data-i18n-placeholder="auth.username" placeholder="İstifadəçi adı" class="auth-input">
+    </div>
+    <div class="auth-field" style="animation-delay:.1s;">
+      <input type="email" id="authEmail" data-i18n-placeholder="auth.email" placeholder="E-poçt" class="auth-input" style="margin-bottom:12px;">
+    </div>
+    <div class="auth-field" style="animation-delay:.15s;">
+      <input type="password" id="authPassword" data-i18n-placeholder="auth.password" placeholder="Şifrə" class="auth-input" style="margin-bottom:16px;">
+    </div>
+    <div class="auth-field" style="animation-delay:.2s;">
+      <button class="btn-primary" id="authSubmitBtn" style="width:100%;padding:14px;" onclick="signUp()" data-i18n="auth.signup">Hesab yarat</button>
+    </div>
+    <div id="authError" class="auth-error"></div>
     <div id="authToggleText" onclick="toggleAuthMode()" style="text-align:center;margin-top:18px;font-size:12.5px;color:var(--text-dim);font-weight:600;cursor:pointer;" data-i18n="auth.toggleToSignin">Artıq hesabın var? Giriş et</div>
   </div>
 </div>
@@ -591,7 +626,7 @@
     <div style="font-size:13px;color:var(--text-dim);margin-bottom:18px;">Bu bölmə yalnız idarəçi üçündür</div>
     <input type="password" id="adminPassInput" placeholder="Şifrə" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:13px;padding:14px 16px;color:var(--text);font-size:15px;text-align:center;letter-spacing:2px;outline:none;margin-bottom:12px;" onkeydown="if(event.key==='Enter')tryAdminLogin()">
     <button class="btn-primary" style="width:100%;padding:14px;" onclick="tryAdminLogin()">Daxil ol</button>
-    <div id="adminLoginError" style="color:var(--danger);font-size:12.5px;font-weight:700;margin-top:12px;display:none;">Şifrə səhvdir</div>
+    <div id="adminLoginError" class="auth-error">Şifrə səhvdir</div>
   </div>
 </div>
 
@@ -1091,10 +1126,12 @@ function tryAdminLogin(){
   if(val === ADMIN_PASSWORD){
     isAdmin = true;
     document.getElementById('adminPassInput').value = '';
-    document.getElementById('adminLoginError').style.display = 'none';
+    document.getElementById('adminLoginError').classList.remove('show');
     goPage('admin');
   } else {
-    document.getElementById('adminLoginError').style.display = 'block';
+    document.getElementById('adminLoginError').classList.remove('show');
+    void document.getElementById('adminLoginError').offsetWidth; // restart animation if triggered twice in a row
+    document.getElementById('adminLoginError').classList.add('show');
   }
 }
 
@@ -1184,13 +1221,13 @@ async function signUp(){
   const username = document.getElementById('authUsername').value.trim();
   if(!email || !password || !username){
     document.getElementById('authError').textContent = state.lang==='en'?'Fill in all fields':(state.lang==='tr'?'Tüm alanları doldur':'Bütün sahələri doldur');
-    document.getElementById('authError').style.display = 'block';
+    document.getElementById('authError').classList.add('show');
     return;
   }
   const { data, error } = await sb.auth.signUp({ email, password, options: { data: { username } } });
   if(error){
     document.getElementById('authError').textContent = error.message;
-    document.getElementById('authError').style.display = 'block';
+    document.getElementById('authError').classList.add('show');
     return;
   }
   if(data.user){
@@ -1219,7 +1256,7 @@ async function signIn(){
   const { error } = await sb.auth.signInWithPassword({ email, password });
   if(error){
     document.getElementById('authError').textContent = error.message;
-    document.getElementById('authError').style.display = 'block';
+    document.getElementById('authError').classList.add('show');
     return;
   }
   await refreshCurrentUser();
@@ -1649,7 +1686,7 @@ document.addEventListener('input', (e)=>{
 
 async function renderAdminTrending(){
   const wrap = document.getElementById('adminResults');
-  wrap.innerHTML = `<div class="loading-row">⟳ Yüklənir...</div>`;
+  wrap.innerHTML = `<div class="loading-row"><span class="spinner"></span>Yüklənir...</div>`;
   try{
     const results = await anilistTrending();
     renderAdminResults(results);
@@ -1660,7 +1697,7 @@ async function renderAdminTrending(){
 
 async function runAdminSearch(q){
   const wrap = document.getElementById('adminResults');
-  wrap.innerHTML = `<div class="loading-row">⟳ Axtarılır...</div>`;
+  wrap.innerHTML = `<div class="loading-row"><span class="spinner"></span>Axtarılır...</div>`;
   try{
     const results = await anilistSearch(q);
     renderAdminResults(results);
@@ -1892,7 +1929,7 @@ function renderAdminDashboard(){
       const src = m.episodeSources && m.episodeSources[ep];
       const hasVideo = src && src.video;
       const hasSub = src && src.subtitle;
-      const color = hasVideo && hasSub ? '#6FBF8B' : hasVideo ? '#E8B84B' : '#E2604F';
+      const color = hasVideo && hasSub ? '#4ADE9E' : hasVideo ? '#6C8CFF' : '#FF5C7A';
       return `<span title="Ep ${ep}" style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></span>`;
     }).join('');
     return `
@@ -1947,7 +1984,7 @@ function selectSeasonBase(id){
 
 async function renderSeasonPickTrending(){
   const wrap = document.getElementById('seasonPickResults');
-  wrap.innerHTML = `<div class="loading-row">⟳ Yüklənir...</div>`;
+  wrap.innerHTML = `<div class="loading-row"><span class="spinner"></span>Yüklənir...</div>`;
   try{
     const results = await anilistTrending();
     renderSeasonPickResults(results);
@@ -1957,7 +1994,7 @@ async function renderSeasonPickTrending(){
 }
 async function runSeasonPickSearch(q){
   const wrap = document.getElementById('seasonPickResults');
-  wrap.innerHTML = `<div class="loading-row">⟳ Axtarılır...</div>`;
+  wrap.innerHTML = `<div class="loading-row"><span class="spinner"></span>Axtarılır...</div>`;
   try{
     const results = await anilistSearch(q);
     renderSeasonPickResults(results);
@@ -2908,7 +2945,7 @@ const STATUS_ICONS = {
   watching: '▶', planned: '☰', completed: '✓', on_hold: '❚❚', dropped: '✕'
 };
 const STATUS_COLORS = {
-  watching: '#7C9CFF', planned: '#8B8F9C', completed: '#6FBF8B', on_hold: '#E8B84B', dropped: '#E2604F'
+  watching: '#6C8CFF', planned: '#8B8FA8', completed: '#4ADE9E', on_hold: '#FFB84D', dropped: '#FF5C7A'
 };
 
 // Single compact action bar replacing the old always-expanded status pills +
@@ -3303,7 +3340,7 @@ function buildCustomControls(vid, frame){
   const scrub = document.createElement('input');
   scrub.type = 'range';
   scrub.min = '0'; scrub.max = '100'; scrub.value = '0'; scrub.step = '0.1';
-  scrub.style.cssText = 'width:100%; accent-color:#E8B84B; height:4px; cursor:pointer;';
+  scrub.style.cssText = 'width:100%; accent-color:#6C8CFF; height:4px; cursor:pointer;';
   let scrubbing = false;
   scrub.addEventListener('input', ()=>{ scrubbing = true; });
   scrub.addEventListener('change', ()=>{
@@ -3532,9 +3569,9 @@ function renderPlayerEpisodeList(){
     const isWatched = !!state.episodeProgress[currentDetail.id+':'+i];
     const isCurrent = i === currentEpisodeNum;
     html += `
-    <div onclick="playEpisodeFromPanel(${i})" style="display:flex; align-items:center; gap:8px; padding:10px 8px; border-radius:9px; margin-bottom:4px; background:${isCurrent?'rgba(232,184,75,0.15)':'transparent'}; cursor:pointer;">
+    <div onclick="playEpisodeFromPanel(${i})" style="display:flex; align-items:center; gap:8px; padding:10px 8px; border-radius:9px; margin-bottom:4px; background:${isCurrent?'rgba(108,140,255,0.15)':'transparent'}; cursor:pointer;">
       <span style="width:18px; text-align:center; color:${isWatched?'#6FBF8B':'#8B8F9C'}; font-size:13px;">${isWatched?'✓':(isCurrent?'▶':'')}</span>
-      <span style="font-size:13px; color:${isCurrent?'#E8B84B':'#fff'}; font-weight:${isCurrent?'700':'500'};">${state.lang==='en'?'Episode':'Bölüm'} ${i}</span>
+      <span style="font-size:13px; color:${isCurrent?'#6C8CFF':'#fff'}; font-weight:${isCurrent?'700':'500'};">${state.lang==='en'?'Episode':'Bölüm'} ${i}</span>
     </div>`;
   }
   wrap.innerHTML = html;
