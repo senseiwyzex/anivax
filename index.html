@@ -8,50 +8,50 @@
   @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Sora:wght@600;700;800&display=swap');
 
   :root{
-    --bg: #06070D;
-    --bg-elevated: #10121C;
-    --card: #151827;
-    --accent: #6C8CFF;
-    --accent-dim: #4A5FC7;
-    --accent-2: #B98CFF;
-    --text: #F3F4FA;
-    --text-dim: #8B8FA8;
-    --line: rgba(255,255,255,0.08);
-    --danger: #FF5C7A;
-    --success: #4ADE9E;
-    --shadow-sm: 0 2px 8px rgba(0,0,0,0.25);
-    --shadow-md: 0 10px 28px rgba(0,0,0,0.38);
-    --shadow-glow: 0 0 28px rgba(108,140,255,0.22);
+    --bg: #0A0C12;
+    --bg-elevated: #12151E;
+    --card: #171A24;
+    --accent: #E8B84B;
+    --accent-dim: #a3862f;
+    --accent-2: #E8B84B;
+    --text: #F2F1EC;
+    --text-dim: #8B8F9C;
+    --line: rgba(255,255,255,0.07);
+    --danger: #E2604F;
+    --success: #6FBF8B;
+    --shadow-sm: 0 2px 8px rgba(0,0,0,0.22);
+    --shadow-md: 0 8px 24px rgba(0,0,0,0.32);
+    --shadow-glow: 0 0 24px rgba(232,184,75,0.15);
     --radius-card: 16px;
     --radius-pill: 12px;
   }
   [data-theme="light"]{
-    --bg: #F5F6FB;
+    --bg: #F7F5F0;
     --bg-elevated: #FFFFFF;
     --card: #FFFFFF;
-    --accent: #4A5FE8;
-    --accent-dim: #3648B8;
-    --accent-2: #8B5FE0;
-    --text: #14152A;
-    --text-dim: #6B6E85;
-    --line: rgba(20,21,42,0.08);
-    --shadow-sm: 0 2px 8px rgba(20,21,42,0.06);
-    --shadow-md: 0 10px 28px rgba(20,21,42,0.09);
-    --shadow-glow: 0 0 28px rgba(74,95,232,0.14);
+    --accent: #C9932E;
+    --accent-dim: #a3862f;
+    --accent-2: #C9932E;
+    --text: #1A1B1F;
+    --text-dim: #6B6E78;
+    --line: rgba(0,0,0,0.08);
+    --shadow-sm: 0 2px 8px rgba(0,0,0,0.07);
+    --shadow-md: 0 8px 24px rgba(0,0,0,0.1);
+    --shadow-glow: 0 0 24px rgba(201,147,46,0.12);
   }
   [data-theme="midnight"]{
-    --bg: #030308;
-    --bg-elevated: #0A0B14;
-    --card: #0E101B;
-    --accent: #8CA8FF;
-    --accent-dim: #5A72CC;
-    --accent-2: #C9A8FF;
-    --text: #EEEFF7;
-    --text-dim: #767A94;
-    --line: rgba(140,168,255,0.14);
-    --shadow-sm: 0 2px 8px rgba(0,0,0,0.35);
-    --shadow-md: 0 10px 28px rgba(0,0,0,0.45);
-    --shadow-glow: 0 0 28px rgba(140,168,255,0.24);
+    --bg: #05060A;
+    --bg-elevated: #0D0F16;
+    --card: #10121A;
+    --accent: #7C9CFF;
+    --accent-dim: #4E5FA3;
+    --accent-2: #7C9CFF;
+    --text: #EDEEF5;
+    --text-dim: #767A8C;
+    --line: rgba(124,156,255,0.12);
+    --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+    --shadow-md: 0 8px 24px rgba(0,0,0,0.4);
+    --shadow-glow: 0 0 24px rgba(124,156,255,0.18);
   }
 
   *{ margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
@@ -106,7 +106,7 @@
   .hero-img{ position:absolute; inset:0; background-size:cover; background-position:center 20%; }
   .hero::before{
     content:''; position:absolute; inset:0;
-    background: radial-gradient(circle at 80% 20%, rgba(108,140,255,0.2), transparent 55%), linear-gradient(to top, rgba(0,0,0,0.88) 15%, rgba(0,0,0,0.15) 75%);
+    background: radial-gradient(circle at 80% 20%, rgba(232,184,75,0.18), transparent 55%), linear-gradient(to top, rgba(0,0,0,0.88) 15%, rgba(0,0,0,0.15) 75%);
   }
   .hero-content{ position:relative; padding: 18px 20px; width:100%; }
   .hero-eyebrow{ font-size:11px; font-weight:700; color:var(--accent); letter-spacing:0.12em; text-transform:uppercase; margin-bottom:6px; }
@@ -1929,7 +1929,7 @@ function renderAdminDashboard(){
       const src = m.episodeSources && m.episodeSources[ep];
       const hasVideo = src && src.video;
       const hasSub = src && src.subtitle;
-      const color = hasVideo && hasSub ? '#4ADE9E' : hasVideo ? '#6C8CFF' : '#FF5C7A';
+      const color = hasVideo && hasSub ? '#6FBF8B' : hasVideo ? '#E8B84B' : '#E2604F';
       return `<span title="Ep ${ep}" style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></span>`;
     }).join('');
     return `
@@ -2377,8 +2377,10 @@ function resumeFromHistory(animeId, baseId, episode){
   if(!base) return;
   const anime = (base.id === animeId) ? base : (base.seasons||[]).find(s=>s.id===animeId);
   if(!anime) return;
-  currentDetail = anime;
-  currentDetailBase = base;
+  // Populate the detail page's state/DOM first (season selector, episode list,
+  // action bar) so that if the user backs out of the player, they land on a
+  // correctly-filled detail page instead of a stale/blank one.
+  openDetail(animeId, base, true);
   playEpisode(episode);
 }
 
@@ -2622,7 +2624,7 @@ function unlinkSeason(baseId, idx){
 
 let currentDetail = null;
 let currentDetailBase = null;
-function openDetail(id, base){
+function openDetail(id, base, skipHistory){
   const baseEntry = base || state.library.find(x => x.id === id || (x.seasons||[]).some(s=>s.id===id));
   const m = (baseEntry && baseEntry.id === id) ? baseEntry : (baseEntry.seasons||[]).find(s=>s.id===id);
   if(!m) return;
@@ -2700,7 +2702,7 @@ function openDetail(id, base){
     </div>`;
   }
   epList.innerHTML = html;
-  goPage('detail');
+  goPage('detail', { id: m.id }, skipHistory);
 }
 
 // Renders "similar anime" from AniList's own recommendations for this title —
@@ -2945,7 +2947,7 @@ const STATUS_ICONS = {
   watching: '▶', planned: '☰', completed: '✓', on_hold: '❚❚', dropped: '✕'
 };
 const STATUS_COLORS = {
-  watching: '#6C8CFF', planned: '#8B8FA8', completed: '#4ADE9E', on_hold: '#FFB84D', dropped: '#FF5C7A'
+  watching: '#7C9CFF', planned: '#8B8F9C', completed: '#6FBF8B', on_hold: '#E8B84B', dropped: '#E2604F'
 };
 
 // Single compact action bar replacing the old always-expanded status pills +
@@ -3116,12 +3118,12 @@ function saveEpisodeSource(){
 let currentEpisodeNum = null;
 let hlsInstance = null;
 
-function playEpisode(n){
+function playEpisode(n, skipHistory){
   currentEpisodeNum = n;
   document.getElementById('playerTitle').textContent = currentDetail ? (currentDetail.title.english||currentDetail.title.romaji) : '—';
   document.getElementById('playerSub').textContent = (state.lang==='en'?'Episode ':'Bölüm ') + n;
   recordWatchHistory(n);
-  goPage('player');
+  goPage('player', { animeId: currentDetail?.id, episode: n }, skipHistory);
   loadEpisodeIntoPlayer(n);
 }
 
@@ -3340,7 +3342,7 @@ function buildCustomControls(vid, frame){
   const scrub = document.createElement('input');
   scrub.type = 'range';
   scrub.min = '0'; scrub.max = '100'; scrub.value = '0'; scrub.step = '0.1';
-  scrub.style.cssText = 'width:100%; accent-color:#6C8CFF; height:4px; cursor:pointer;';
+  scrub.style.cssText = 'width:100%; accent-color:#E8B84B; height:4px; cursor:pointer;';
   let scrubbing = false;
   scrub.addEventListener('input', ()=>{ scrubbing = true; });
   scrub.addEventListener('change', ()=>{
@@ -3569,9 +3571,9 @@ function renderPlayerEpisodeList(){
     const isWatched = !!state.episodeProgress[currentDetail.id+':'+i];
     const isCurrent = i === currentEpisodeNum;
     html += `
-    <div onclick="playEpisodeFromPanel(${i})" style="display:flex; align-items:center; gap:8px; padding:10px 8px; border-radius:9px; margin-bottom:4px; background:${isCurrent?'rgba(108,140,255,0.15)':'transparent'}; cursor:pointer;">
+    <div onclick="playEpisodeFromPanel(${i})" style="display:flex; align-items:center; gap:8px; padding:10px 8px; border-radius:9px; margin-bottom:4px; background:${isCurrent?'rgba(232,184,75,0.15)':'transparent'}; cursor:pointer;">
       <span style="width:18px; text-align:center; color:${isWatched?'#6FBF8B':'#8B8F9C'}; font-size:13px;">${isWatched?'✓':(isCurrent?'▶':'')}</span>
-      <span style="font-size:13px; color:${isCurrent?'#6C8CFF':'#fff'}; font-weight:${isCurrent?'700':'500'};">${state.lang==='en'?'Episode':'Bölüm'} ${i}</span>
+      <span style="font-size:13px; color:${isCurrent?'#E8B84B':'#fff'}; font-weight:${isCurrent?'700':'500'};">${state.lang==='en'?'Episode':'Bölüm'} ${i}</span>
     </div>`;
   }
   wrap.innerHTML = html;
@@ -3626,7 +3628,25 @@ function setPlaybackSpeed(speed, btn){
   btn.classList.add('active');
 }
 
-function goPage(name){
+// Maps in-app page names to clean URL paths, and back. This lets the browser's
+// URL bar reflect where the user actually is (e.g. /anime/21), and — critically —
+// lets a page refresh restore that same view instead of always bouncing to home.
+function pageToPath(name, params){
+  params = params || {};
+  switch(name){
+    case 'detail': return '/anime/' + params.id;
+    case 'player': return '/watch/' + params.animeId + '/' + params.episode;
+    case 'library': return '/library';
+    case 'search': return '/search';
+    case 'mylists': return '/lists';
+    case 'stats': return '/stats';
+    case 'settings': return '/settings';
+    case 'admin': return '/admin';
+    case 'home': default: return '/';
+  }
+}
+
+function goPage(name, params, skipHistory){
   if(name === 'admin' && !isAdmin){ name = 'adminlogin'; }
   // Tear down any active player when navigating away from the player page
   // through any path (bottom nav, back button, etc), not just the dedicated back button.
@@ -3635,9 +3655,10 @@ function goPage(name){
 
   document.querySelectorAll('.page').forEach(p=>p.classList.add('hidden'));
   const target = document.getElementById('page-'+name);
-  target.classList.remove('hidden');
-  void target.offsetWidth;
-  target.classList.remove('page'); void target.offsetWidth; target.classList.add('page');
+  if(!target){ goPage('home'); return; } // guard against an unknown/garbled page name
+  target.classList.remove('hidden', 'page');
+  void target.offsetWidth; // single forced reflow, just enough to restart the CSS animation
+  target.classList.add('page');
 
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   const navBtn = document.querySelector(`.nav-item[data-nav="${name}"]`);
@@ -3653,7 +3674,72 @@ function goPage(name){
   }
   if(name !== 'admin') hideSeasonConfirmBar();
 
+  // Update the URL bar (and browser history) unless this call came FROM a
+  // popstate event (back/forward button), which already changed the URL itself.
+  if(!skipHistory){
+    const path = pageToPath(name, params);
+    if(location.pathname !== path){
+      try{ history.pushState({ page:name, params: params||{} }, '', path); }
+      catch(e){ /* e.g. file:// origin during local testing — safe to ignore */ }
+    }
+  }
+
   window.scrollTo({top:0, behavior:'instant'});
+}
+
+// Handles browser back/forward buttons — restores the matching in-app page
+// instead of leaving a blank/broken screen.
+window.addEventListener('popstate', (e)=>{
+  const st = e.state;
+  if(st && st.page){
+    restorePageFromState(st.page, st.params);
+  } else {
+    restoreFromPath(location.pathname);
+  }
+});
+
+// Re-enters a page given just its name+params, re-fetching whatever detail
+// data that page needs (used both for popstate and for the initial load below).
+function restorePageFromState(name, params){
+  params = params || {};
+  if(name === 'detail' && params.id){
+    const anime = findAnimeById(parseInt(params.id));
+    if(anime){
+      const base = state.library.find(b => b.id === anime.id || (b.seasons||[]).some(s=>s.id===anime.id)) || anime;
+      openDetail(anime.id, base, true);
+      return;
+    }
+  }
+  if(name === 'player' && params.animeId && params.episode){
+    const anime = findAnimeById(parseInt(params.animeId));
+    if(anime){
+      const base = state.library.find(b => b.id === anime.id || (b.seasons||[]).some(s=>s.id===anime.id)) || anime;
+      currentDetail = anime;
+      currentDetailBase = base;
+      playEpisode(parseInt(params.episode), true);
+      return;
+    }
+  }
+  goPage(name, params, true);
+}
+
+// Parses a raw URL path (used on first load, since there's no history state yet)
+// into a page name + params, then restores it. Falls back to home for anything
+// that doesn't match a known anime/episode (e.g. the library isn't loaded yet).
+function restoreFromPath(path){
+  const animeMatch = path.match(/^\/anime\/(\d+)/);
+  const watchMatch = path.match(/^\/watch\/(\d+)\/(\d+)/);
+  if(watchMatch){
+    restorePageFromState('player', { animeId: watchMatch[1], episode: watchMatch[2] });
+    return;
+  }
+  if(animeMatch){
+    restorePageFromState('detail', { id: animeMatch[1] });
+    return;
+  }
+  const simple = { '/library':'library', '/search':'search', '/lists':'mylists', '/stats':'stats', '/settings':'settings', '/admin':'admin' };
+  if(simple[path]){ goPage(simple[path], {}, true); return; }
+  goPage('home', {}, true);
 }
 
 // ================= INIT =================
@@ -3666,7 +3752,17 @@ function bootApp(retriesLeft){
     return;
   }
   loadTranslationCache();
-  loadState().then(()=>{ initToggles(); }).catch(e=>{
+  loadState().then(()=>{
+    initToggles();
+    // Restore whatever page the URL points to (e.g. a refreshed /anime/21),
+    // instead of always landing on home. Falls back to home if the path
+    // doesn't match anything or the referenced anime isn't in the library.
+    if(location.pathname && location.pathname !== '/'){
+      restoreFromPath(location.pathname);
+    } else {
+      try{ history.replaceState({ page:'home', params:{} }, '', '/'); }catch(e){}
+    }
+  }).catch(e=>{
     console.error('bootApp: loadState rejected entirely', e);
     forceShowEmptyHome();
   });
