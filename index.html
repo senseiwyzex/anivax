@@ -3833,48 +3833,6 @@ function forceShowEmptyHome(){
     }
   }catch(e){}
 }
-async function scrapeAnimeFromClient(targetUrl) {
-    try {
-        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
-        const response = await fetch(proxyUrl);
-        
-        if (!response.ok) throw new Error("Proxy bağlantı hatası");
-        
-        const data = await response.json();
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(data.contents, 'text/html');
-
-        // 1. Başlık çekme
-        const title = doc.querySelector('h1')?.innerText?.trim() || 'Başlık Bulunamadı';
-
-        // 2. Iframe linkini alma
-        let videoIframe = doc.querySelector('iframe')?.getAttribute('src') || '';
-
-        // 3. Relative URL düzeltme (Önemli!)
-        if (videoIframe) {
-            if (videoIframe.startsWith('//')) {
-                videoIframe = 'https:' + videoIframe;
-            } else if (videoIframe.startsWith('/')) {
-                videoIframe = new URL(videoIframe, targetUrl).href;
-            }
-        }
-
-        // 4. Player'a yerleştirme
-        if (videoIframe) {
-            const myPlayer = document.querySelector('#page-player iframe');
-            if (myPlayer) {
-                myPlayer.src = videoIframe;
-            }
-        } else {
-            console.warn("Iframe bulunamadı, site Cloudflare ile korunuyor olabilir.");
-        }
-
-        return { title, videoIframe };
-
-    } catch (error) {
-        console.error('Scraping hatası:', error);
-    }
-}
 </script>
 </body>
 </html>
