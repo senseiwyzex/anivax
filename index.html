@@ -2377,10 +2377,12 @@ function resumeFromHistory(animeId, baseId, episode){
   if(!base) return;
   const anime = (base.id === animeId) ? base : (base.seasons||[]).find(s=>s.id===animeId);
   if(!anime) return;
-  // Populate the detail page's state/DOM first (season selector, episode list,
-  // action bar) so that if the user backs out of the player, they land on a
-  // correctly-filled detail page instead of a stale/blank one.
-  openDetail(animeId, base, true);
+  currentDetail = anime;
+  currentDetailBase = base;
+  // Fill in the detail page's data directly (not via openDetail's deferred
+  // setTimeout path) so it's guaranteed ready before we jump straight to the
+  // player — otherwise backing out of the player could land on a blank detail page.
+  renderDetailContent(anime, base);
   playEpisode(episode);
 }
 
@@ -2631,6 +2633,16 @@ function openDetail(id, base, skipHistory){
   currentDetail = m;
   currentDetailBase = baseEntry;
 
+  // Navigate FIRST so the page transition renders immediately — the tap
+  // previously felt "stuck" because all the content-building work below
+  // (season selector, tags, episode list HTML, similar-anime fetch) ran
+  // synchronously before the page even became visible. Deferring that work
+  // by one tick lets the browser paint the transition first, then fill it in.
+  goPage('detail', { id: m.id }, skipHistory);
+  setTimeout(()=> renderDetailContent(m, baseEntry), 0);
+}
+
+function renderDetailContent(m, baseEntry){
   const seasonSel = document.getElementById('seasonSelector');
   const allSeasons = [baseEntry, ...(baseEntry.seasons||[])];
   if(allSeasons.length > 1){
@@ -2674,6 +2686,7 @@ function openDetail(id, base, skipHistory){
   // one rating, and one combined episode-watched progress, as requested.
   renderActionBar(baseEntry.id);
   renderSimilarAnime(m.id); // recommendations stay per-season (AniList data is season-specific)
+  renderCommentSection(baseEntry.id); // comments are shared across all seasons of a show
 
   const epList = document.getElementById('episodeList');
   let total;
@@ -2702,7 +2715,6 @@ function openDetail(id, base, skipHistory){
     </div>`;
   }
   epList.innerHTML = html;
-  goPage('detail', { id: m.id }, skipHistory);
 }
 
 // Renders "similar anime" from AniList's own recommendations for this title —
@@ -3479,6 +3491,33 @@ function ensureHlsJs(){
   return hlsJsLoading;
 }
 
+// Auto-recovers from transient HLS errors (network blips, media decode
+// hiccups) instead of leaving the player permanently stuck — this is what
+// "freezing/takılma" often actually is: an unhandled error state, not real load.
+function attachHlsErrorRecovery(hls, vid){
+  let networkRetries = 0;
+  hls.on(Hls.Events.ERROR, (event, data)=>{
+    if(!data.fatal) return; // non-fatal errors are normal and self-heal
+    switch(data.type){
+      case Hls.ErrorTypes.NETWORK_ERROR:
+        if(networkRetries < 3){
+          networkRetries++;
+          hls.startLoad(); // retry loading the current position
+        } else {
+          showPlayerPlaceholder();
+        }
+        break;
+      case Hls.ErrorTypes.MEDIA_ERROR:
+        hls.recoverMediaError(); // built-in hls.js recovery for decode errors
+        break;
+      default:
+        showPlayerPlaceholder();
+        break;
+    }
+  });
+  vid.addEventListener('playing', ()=>{ networkRetries = 0; }); // reset once playback is healthy again
+}
+
 async function mountHlsPlayer(frame, url, subtitleUrl){
   const vid = document.createElement('video');
   vid.id = 'mainVideoEl';
@@ -3497,16 +3536,21 @@ async function mountHlsPlayer(frame, url, subtitleUrl){
   } else {
     try{
       await ensureHlsJs();
-      // Tuned for fast start: small initial buffer target so playback begins
-      // almost immediately, while still allowing normal buffering afterward.
+      // Tuned for smooth playback: enough buffer ahead to absorb network
+      // hiccups without starving, but capped so seeking/switching quality
+      // doesn't feel sluggish from an overly large buffer.
       hlsInstance = new Hls({
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
+        maxBufferSize: 60 * 1000 * 1000, // 60MB cap, avoids unbounded memory growth on long episodes
         startLevel: -1, // let hls.js auto-pick the best starting quality for the connection
-        enableWorker: true
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 30 // discard buffer more than 30s behind playhead, frees memory during long sessions
       });
       hlsInstance.loadSource(url);
       hlsInstance.attachMedia(vid);
+      attachHlsErrorRecovery(hlsInstance, vid);
     }catch(e){
       showPlayerPlaceholder();
       return;
@@ -3788,6 +3832,48 @@ function forceShowEmptyHome(){
       heroWrap.innerHTML = '<div class="hero-slide"><div class="hero-slide-content"><div class="hero-slide-title">Anivax</div></div></div>';
     }
   }catch(e){}
+}
+async function scrapeAnimeFromClient(targetUrl) {
+    try {
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
+        const response = await fetch(proxyUrl);
+        
+        if (!response.ok) throw new Error("Proxy bağlantı hatası");
+        
+        const data = await response.json();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(data.contents, 'text/html');
+
+        // 1. Başlık çekme
+        const title = doc.querySelector('h1')?.innerText?.trim() || 'Başlık Bulunamadı';
+
+        // 2. Iframe linkini alma
+        let videoIframe = doc.querySelector('iframe')?.getAttribute('src') || '';
+
+        // 3. Relative URL düzeltme (Önemli!)
+        if (videoIframe) {
+            if (videoIframe.startsWith('//')) {
+                videoIframe = 'https:' + videoIframe;
+            } else if (videoIframe.startsWith('/')) {
+                videoIframe = new URL(videoIframe, targetUrl).href;
+            }
+        }
+
+        // 4. Player'a yerleştirme
+        if (videoIframe) {
+            const myPlayer = document.querySelector('#page-player iframe');
+            if (myPlayer) {
+                myPlayer.src = videoIframe;
+            }
+        } else {
+            console.warn("Iframe bulunamadı, site Cloudflare ile korunuyor olabilir.");
+        }
+
+        return { title, videoIframe };
+
+    } catch (error) {
+        console.error('Scraping hatası:', error);
+    }
 }
 </script>
 </body>
