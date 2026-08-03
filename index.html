@@ -2639,82 +2639,115 @@ function openDetail(id, base, skipHistory){
   // synchronously before the page even became visible. Deferring that work
   // by one tick lets the browser paint the transition first, then fill it in.
   goPage('detail', { id: m.id }, skipHistory);
-  setTimeout(()=> renderDetailContent(m, baseEntry), 0);
+  setTimeout(()=>{
+    try{
+      renderDetailContent(m, baseEntry);
+    }catch(e){
+      // A malformed anime entry (missing field, unexpected shape) must not leave
+      // the detail page permanently blank — this is exactly what caused the bug
+      // where only the "İzlə" button showed with no title/hero/description.
+      console.error('renderDetailContent failed for anime', m.id, e);
+      const titleEl = document.getElementById('detailTitle');
+      if(titleEl) titleEl.textContent = m.title ? (m.title.english || m.title.romaji || m.title.native || '—') : '—';
+      showToast(state.lang==='en' ? 'Some details failed to load' : (state.lang==='tr' ? 'Bazı detaylar yüklenemedi' : 'Bəzi detallar yüklənmədi'));
+    }
+  }, 0);
 }
 
 function renderDetailContent(m, baseEntry){
-  const seasonSel = document.getElementById('seasonSelector');
-  const allSeasons = [baseEntry, ...(baseEntry.seasons||[])];
-  if(allSeasons.length > 1){
-    seasonSel.style.display = 'flex';
-    const seasonNumbers = [1, ...computeSeasonNumbers(baseEntry.seasons||[])];
-    seasonSel.innerHTML = allSeasons.map((s,i)=>{
-      const active = s.id === m.id;
-      const isPart2 = i > 0 && s.samePartAsPrevious;
-      const label = isPart2 ? `${state.lang==='en'?'Season':'Sezon'} ${seasonNumbers[i]} · Part 2` : `${state.lang==='en'?'Season':'Sezon'} ${seasonNumbers[i]}`;
-      return `<button class="option-pill ${active?'active':''}" style="flex-shrink:0;" onclick="openDetail(${s.id}, currentDetailBase)">${label}</button>`;
-    }).join('');
-  } else {
-    seasonSel.style.display = 'none';
-    seasonSel.innerHTML = '';
-  }
-
-  const title = m.title.english || m.title.romaji || m.title.native;
-  document.getElementById('detailTitle').textContent = title;
-  const rawDesc = stripHtml(m.description).slice(0,500);
-  document.getElementById('detailDesc').textContent = state.lang==='en' ? rawDesc : '⟳ ' + (state.lang==='tr'?'çevriliyor...':'tərcümə olunur...');
-  translateText(rawDesc, state.lang).then(translated=>{
-    if(currentDetail && currentDetail.id === m.id){
-      document.getElementById('detailDesc').textContent = translated;
+  try{
+    const seasonSel = document.getElementById('seasonSelector');
+    const allSeasons = [baseEntry, ...(baseEntry.seasons||[])];
+    if(allSeasons.length > 1){
+      seasonSel.style.display = 'flex';
+      const seasonNumbers = [1, ...computeSeasonNumbers(baseEntry.seasons||[])];
+      seasonSel.innerHTML = allSeasons.map((s,i)=>{
+        const active = s.id === m.id;
+        const isPart2 = i > 0 && s.samePartAsPrevious;
+        const label = isPart2 ? `${state.lang==='en'?'Season':'Sezon'} ${seasonNumbers[i]} · Part 2` : `${state.lang==='en'?'Season':'Sezon'} ${seasonNumbers[i]}`;
+        return `<button class="option-pill ${active?'active':''}" style="flex-shrink:0;" onclick="openDetail(${s.id}, currentDetailBase)">${label}</button>`;
+      }).join('');
+    } else {
+      seasonSel.style.display = 'none';
+      seasonSel.innerHTML = '';
     }
-  });
-  const score = m.averageScore ? (m.averageScore/10).toFixed(1) : null;
-  const studioName = m.studios && m.studios.nodes && m.studios.nodes[0] ? m.studios.nodes[0].name : null;
-  const statusLabels = { RELEASING: state.lang==='en'?'Airing':(state.lang==='tr'?'Devam ediyor':'Davam edir'), FINISHED: state.lang==='en'?'Finished':(state.lang==='tr'?'Tamamlandı':'Tamamlandı'), NOT_YET_RELEASED: state.lang==='en'?'Upcoming':(state.lang==='tr'?'Yakında':'Tezliklə') };
-  const extraTags = [];
-  if(score) extraTags.push(`<span class="tag" style="color:#FFD25A;">★ ${score}</span>`);
-  const communityForBase = state.communityRatings[baseEntry.id];
-  if(communityForBase) extraTags.push(`<span class="tag" style="color:#7C9CFF;">Anivax ${communityForBase.avg}</span>`);
-  if(studioName) extraTags.push(`<span class="tag">${studioName}</span>`);
-  if(m.status && statusLabels[m.status]) extraTags.push(`<span class="tag">${statusLabels[m.status]}</span>`);
-  if(m.format) extraTags.push(`<span class="tag">${m.format}</span>`);
-  document.getElementById('detailTags').innerHTML = extraTags.join('') + (m.genres||[]).map(g=>`<span class="tag">${g}</span>`).join('') + `<span class="tag">${m.seasonYear||''}</span>`;
-  document.getElementById('detailHero').style.backgroundImage = `url('${m.bannerImage || m.coverImage.large}')`;
+  }catch(e){ console.error('renderDetailContent: season selector failed', e); }
+
+  // Title/hero/tags are the most visually critical part of the page — this is
+  // exactly the block whose failure previously left the page showing only the
+  // "İzlə" button with nothing else, so every field here is defended individually.
+  try{
+    const title = (m.title && (m.title.english || m.title.romaji || m.title.native)) || '—';
+    document.getElementById('detailTitle').textContent = title;
+  }catch(e){ console.error('renderDetailContent: title failed', e); }
+
+  try{
+    const rawDesc = stripHtml(m.description || '').slice(0,500);
+    document.getElementById('detailDesc').textContent = state.lang==='en' ? rawDesc : '⟳ ' + (state.lang==='tr'?'çevriliyor...':'tərcümə olunur...');
+    translateText(rawDesc, state.lang).then(translated=>{
+      if(currentDetail && currentDetail.id === m.id){
+        const el = document.getElementById('detailDesc');
+        if(el) el.textContent = translated;
+      }
+    }).catch(()=>{});
+  }catch(e){ console.error('renderDetailContent: description failed', e); }
+
+  try{
+    const score = m.averageScore ? (m.averageScore/10).toFixed(1) : null;
+    const studioName = m.studios && m.studios.nodes && m.studios.nodes[0] ? m.studios.nodes[0].name : null;
+    const statusLabels = { RELEASING: state.lang==='en'?'Airing':(state.lang==='tr'?'Devam ediyor':'Davam edir'), FINISHED: state.lang==='en'?'Finished':(state.lang==='tr'?'Tamamlandı':'Tamamlandı'), NOT_YET_RELEASED: state.lang==='en'?'Upcoming':(state.lang==='tr'?'Yakında':'Tezliklə') };
+    const extraTags = [];
+    if(score) extraTags.push(`<span class="tag" style="color:#FFD25A;">★ ${score}</span>`);
+    const communityForBase = state.communityRatings[baseEntry.id];
+    if(communityForBase) extraTags.push(`<span class="tag" style="color:#7C9CFF;">Anivax ${communityForBase.avg}</span>`);
+    if(studioName) extraTags.push(`<span class="tag">${studioName}</span>`);
+    if(m.status && statusLabels[m.status]) extraTags.push(`<span class="tag">${statusLabels[m.status]}</span>`);
+    if(m.format) extraTags.push(`<span class="tag">${m.format}</span>`);
+    document.getElementById('detailTags').innerHTML = extraTags.join('') + (m.genres||[]).map(g=>`<span class="tag">${g}</span>`).join('') + `<span class="tag">${m.seasonYear||''}</span>`;
+  }catch(e){ console.error('renderDetailContent: tags failed', e); }
+
+  try{
+    const banner = m.bannerImage || (m.coverImage && m.coverImage.large) || '';
+    document.getElementById('detailHero').style.backgroundImage = `url('${banner}')`;
+  }catch(e){ console.error('renderDetailContent: hero image failed', e); }
 
   // Status/rating/watched-progress are keyed by the BASE anime id, not the
   // per-season AniList id — so all seasons of one show share one status,
   // one rating, and one combined episode-watched progress, as requested.
-  renderActionBar(baseEntry.id);
-  renderSimilarAnime(m.id); // recommendations stay per-season (AniList data is season-specific)
+  try{ renderActionBar(baseEntry.id); }catch(e){ console.error('renderDetailContent: action bar failed', e); }
+  try{ renderSimilarAnime(m.id); }catch(e){ console.error('renderDetailContent: similar anime failed', e); } // recommendations stay per-season (AniList data is season-specific)
   // (Comment section not built yet — call removed to avoid breaking episode rendering.)
 
-  const epList = document.getElementById('episodeList');
-  let total;
-  if(m.episodes && m.episodes > 0){
-    total = m.episodes;
-  } else if(m.nextAiringEpisode && m.nextAiringEpisode.episode > 1){
-    total = m.nextAiringEpisode.episode - 1;
-  } else {
-    total = 1;
-  }
-  let html = '';
-  for(let i=1;i<=total;i++){
-    const hasSource = m.episodeSources && m.episodeSources[i] && m.episodeSources[i].video;
-    const isWatched = !!state.episodeProgress[m.id+':'+i];
-    html += `
-    <div class="ep-row">
-      <div class="ep-thumb" onclick="playEpisode(${i})">${isWatched ? '✓' : '▶'}</div>
-      <div onclick="playEpisode(${i})" style="flex:1; min-width:0;">
-        <div class="ep-num">${state.lang==='en'?'EPISODE':'BÖLÜM'} ${i} ${isWatched ? '· ✓' : (hasSource?'':'· '+(state.lang==='en'?'no source':(state.lang==='tr'?'kaynak yok':'mənbə yoxdur')))}</div>
-        <div class="ep-name">${title} — ${i}</div>
-      </div>
-      ${isAdmin ? `<button class="cat-icon-btn" onclick="event.stopPropagation();openEpisodeSourceEditor(${i})" style="margin-right:4px;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-      </button>` : ''}
-      <div class="ep-play" onclick="playEpisode(${i})"><svg width="12" height="12" viewBox="0 0 24 24" fill="#1a1400"><path d="M8 5v14l11-7z"/></svg></div>
-    </div>`;
-  }
-  epList.innerHTML = html;
+  try{
+    const title = (m.title && (m.title.english || m.title.romaji || m.title.native)) || '—';
+    const epList = document.getElementById('episodeList');
+    let total;
+    if(m.episodes && m.episodes > 0){
+      total = m.episodes;
+    } else if(m.nextAiringEpisode && m.nextAiringEpisode.episode > 1){
+      total = m.nextAiringEpisode.episode - 1;
+    } else {
+      total = 1;
+    }
+    let html = '';
+    for(let i=1;i<=total;i++){
+      const hasSource = m.episodeSources && m.episodeSources[i] && m.episodeSources[i].video;
+      const isWatched = !!state.episodeProgress[m.id+':'+i];
+      html += `
+      <div class="ep-row">
+        <div class="ep-thumb" onclick="playEpisode(${i})">${isWatched ? '✓' : '▶'}</div>
+        <div onclick="playEpisode(${i})" style="flex:1; min-width:0;">
+          <div class="ep-num">${state.lang==='en'?'EPISODE':'BÖLÜM'} ${i} ${isWatched ? '· ✓' : (hasSource?'':'· '+(state.lang==='en'?'no source':(state.lang==='tr'?'kaynak yok':'mənbə yoxdur')))}</div>
+          <div class="ep-name">${title} — ${i}</div>
+        </div>
+        ${isAdmin ? `<button class="cat-icon-btn" onclick="event.stopPropagation();openEpisodeSourceEditor(${i})" style="margin-right:4px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>` : ''}
+        <div class="ep-play" onclick="playEpisode(${i})"><svg width="12" height="12" viewBox="0 0 24 24" fill="#1a1400"><path d="M8 5v14l11-7z"/></svg></div>
+      </div>`;
+    }
+    epList.innerHTML = html;
+  }catch(e){ console.error('renderDetailContent: episode list failed', e); }
 }
 
 // Renders "similar anime" from AniList's own recommendations for this title —
