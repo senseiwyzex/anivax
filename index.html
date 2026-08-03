@@ -1428,6 +1428,15 @@ async function setAnimeStatus(animeId, status){
     showToast(state.lang==='en'?'Sign in to use lists':(state.lang==='tr'?'Listeler için giriş yap':'Siyahılar üçün giriş et'));
     return;
   }
+  // Tapping the already-selected status again clears it — same "toggle off"
+  // behavior as the rating below, so a status can be unset without opening a
+  // separate menu.
+  const isUnsetting = state.animeStatuses[animeId] === status;
+  if(isUnsetting){
+    delete state.animeStatuses[animeId];
+    try{ await sb.from('user_anime_status').delete().eq('user_id', currentUser.id).eq('anime_id', animeId); }catch(e){}
+    return;
+  }
   state.animeStatuses[animeId] = status;
   try{
     await sb.from('user_anime_status').upsert({ user_id: currentUser.id, anime_id: animeId, status, updated_at: new Date().toISOString() }, { onConflict:'user_id,anime_id' });
@@ -1446,6 +1455,17 @@ function statusLabel(status){
 async function setUserRating(animeId, rating){
   if(!currentUser){
     showToast(state.lang==='en'?'Sign in to rate':(state.lang==='tr'?'Puanlamak için giriş yap':'Qiymətləndirmək üçün giriş et'));
+    return;
+  }
+  // Tapping the same rating number again clears it, as requested — lets the
+  // user "un-rate" without a separate delete control.
+  const isUnsetting = state.userRatings[animeId] === rating;
+  if(isUnsetting){
+    delete state.userRatings[animeId];
+    try{
+      await sb.from('user_ratings').delete().eq('user_id', currentUser.id).eq('anime_id', animeId);
+      await loadCommunityRatings();
+    }catch(e){}
     return;
   }
   state.userRatings[animeId] = rating;
