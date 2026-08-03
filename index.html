@@ -2377,10 +2377,12 @@ function resumeFromHistory(animeId, baseId, episode){
   if(!base) return;
   const anime = (base.id === animeId) ? base : (base.seasons||[]).find(s=>s.id===animeId);
   if(!anime) return;
-  // Populate the detail page's state/DOM first (season selector, episode list,
-  // action bar) so that if the user backs out of the player, they land on a
-  // correctly-filled detail page instead of a stale/blank one.
-  openDetail(animeId, base, true);
+  currentDetail = anime;
+  currentDetailBase = base;
+  // Fill in the detail page's data directly (not via openDetail's deferred
+  // setTimeout path) so it's guaranteed ready before we jump straight to the
+  // player — otherwise backing out of the player could land on a blank detail page.
+  renderDetailContent(anime, base);
   playEpisode(episode);
 }
 
@@ -2631,6 +2633,16 @@ function openDetail(id, base, skipHistory){
   currentDetail = m;
   currentDetailBase = baseEntry;
 
+  // Navigate FIRST so the page transition renders immediately — the tap
+  // previously felt "stuck" because all the content-building work below
+  // (season selector, tags, episode list HTML, similar-anime fetch) ran
+  // synchronously before the page even became visible. Deferring that work
+  // by one tick lets the browser paint the transition first, then fill it in.
+  goPage('detail', { id: m.id }, skipHistory);
+  setTimeout(()=> renderDetailContent(m, baseEntry), 0);
+}
+
+function renderDetailContent(m, baseEntry){
   const seasonSel = document.getElementById('seasonSelector');
   const allSeasons = [baseEntry, ...(baseEntry.seasons||[])];
   if(allSeasons.length > 1){
@@ -2674,6 +2686,7 @@ function openDetail(id, base, skipHistory){
   // one rating, and one combined episode-watched progress, as requested.
   renderActionBar(baseEntry.id);
   renderSimilarAnime(m.id); // recommendations stay per-season (AniList data is season-specific)
+  // (Comment section not built yet — call removed to avoid breaking episode rendering.)
 
   const epList = document.getElementById('episodeList');
   let total;
@@ -2702,7 +2715,6 @@ function openDetail(id, base, skipHistory){
     </div>`;
   }
   epList.innerHTML = html;
-  goPage('detail', { id: m.id }, skipHistory);
 }
 
 // Renders "similar anime" from AniList's own recommendations for this title —
@@ -3329,6 +3341,35 @@ function formatTime(sec){
   return m + ':' + String(s).padStart(2,'0');
 }
 
+// Seeks with awareness of what's already buffered: if the target time falls
+// inside a buffered TimeRange, the jump is instant (no network wait). If it's
+// outside buffered data, it still seeks immediately (the browser/HLS.js will
+// fetch the needed segment) but shows a brief spinner so the jump doesn't look
+// broken while the new segment loads — this is the core of "custom seek" for
+// HTTP/HLS sources, where we don't control buffering ourselves like a raw
+// file source would, but we can react to and communicate it well.
+function smartSeek(vid, targetSeconds){
+  const frame = vid.closest ? vid.closest('.player-frame') : document.getElementById('playerFrame');
+  const isBuffered = Array.from({length: vid.buffered.length}).some((_, i)=>
+    targetSeconds >= vid.buffered.start(i) && targetSeconds <= vid.buffered.end(i)
+  );
+  vid.currentTime = targetSeconds;
+  if(!isBuffered) showSeekSpinner(frame, vid);
+}
+
+function showSeekSpinner(frame, vid){
+  if(!frame || document.getElementById('seekSpinner')) return;
+  const spinner = document.createElement('div');
+  spinner.id = 'seekSpinner';
+  spinner.className = 'spinner';
+  spinner.style.cssText = 'position:absolute; top:50%; left:50%; margin:-10px 0 0 -10px; width:20px; height:20px; border-width:2.5px; z-index:6;';
+  frame.appendChild(spinner);
+  const clear = ()=>{ const el = document.getElementById('seekSpinner'); if(el) el.remove(); };
+  vid.addEventListener('seeked', clear, {once:true});
+  vid.addEventListener('playing', clear, {once:true});
+  setTimeout(clear, 4000); // safety timeout so it never gets stuck showing
+}
+
 // Builds a lightweight custom control bar (play/pause, scrub bar, time, mute,
 // fullscreen, settings) that overlays the video, replacing the native browser
 // controls for a consistent look across Chrome/Safari/etc.
@@ -3339,15 +3380,42 @@ function buildCustomControls(vid, frame){
   bar.id = 'customControlBar';
   bar.style.cssText = 'position:absolute; left:0; right:0; bottom:0; z-index:4; padding:8px 12px 10px; background:linear-gradient(to top, rgba(0,0,0,0.75), transparent); display:flex; flex-direction:column; gap:6px; transition:opacity .25s ease;';
 
+  // Scrub track wrapper: shows a buffered-progress bar underneath the range
+  // input, so the user can see how far ahead the video is actually loaded —
+  // standard YouTube-style feedback that plain <input type=range> doesn't give.
+  const scrubWrap = document.createElement('div');
+  scrubWrap.style.cssText = 'position:relative; height:4px; width:100%;';
+
+  const bufferTrack = document.createElement('div');
+  bufferTrack.style.cssText = 'position:absolute; inset:0; background:rgba(255,255,255,0.15); border-radius:2px; overflow:hidden; pointer-events:none;';
+  const bufferFill = document.createElement('div');
+  bufferFill.style.cssText = 'height:100%; width:0%; background:rgba(255,255,255,0.35); transition:width .2s ease;';
+  bufferTrack.appendChild(bufferFill);
+
   const scrub = document.createElement('input');
   scrub.type = 'range';
   scrub.min = '0'; scrub.max = '100'; scrub.value = '0'; scrub.step = '0.1';
-  scrub.style.cssText = 'width:100%; accent-color:#E8B84B; height:4px; cursor:pointer;';
+  scrub.style.cssText = 'position:absolute; inset:0; width:100%; height:4px; margin:0; accent-color:#E8B84B; cursor:pointer; background:transparent;';
+  scrubWrap.appendChild(bufferTrack);
+  scrubWrap.appendChild(scrub);
+
   let scrubbing = false;
   scrub.addEventListener('input', ()=>{ scrubbing = true; });
   scrub.addEventListener('change', ()=>{
-    if(vid.duration) vid.currentTime = (scrub.value/100) * vid.duration;
+    if(vid.duration) smartSeek(vid, (scrub.value/100) * vid.duration);
     scrubbing = false;
+  });
+
+  // Keeps the buffered-range bar in sync with what the browser has actually
+  // downloaded — reads the media element's own TimeRanges, no guessing needed.
+  vid.addEventListener('progress', ()=>{
+    if(!vid.duration || !vid.buffered.length) return;
+    // Find the buffered range that contains (or is closest ahead of) the playhead.
+    let end = 0;
+    for(let i=0;i<vid.buffered.length;i++){
+      if(vid.buffered.start(i) <= vid.currentTime + 0.5){ end = vid.buffered.end(i); }
+    }
+    bufferFill.style.width = Math.min(100, (end / vid.duration) * 100) + '%';
   });
 
   const row = document.createElement('div');
@@ -3393,7 +3461,7 @@ function buildCustomControls(vid, frame){
   row.appendChild(muteBtn);
   row.appendChild(settingsBtn);
   row.appendChild(fsBtn);
-  bar.appendChild(scrub);
+  bar.appendChild(scrubWrap);
   bar.appendChild(row);
   frame.appendChild(bar);
 
@@ -3479,6 +3547,33 @@ function ensureHlsJs(){
   return hlsJsLoading;
 }
 
+// Auto-recovers from transient HLS errors (network blips, media decode
+// hiccups) instead of leaving the player permanently stuck — this is what
+// "freezing/takılma" often actually is: an unhandled error state, not real load.
+function attachHlsErrorRecovery(hls, vid){
+  let networkRetries = 0;
+  hls.on(Hls.Events.ERROR, (event, data)=>{
+    if(!data.fatal) return; // non-fatal errors are normal and self-heal
+    switch(data.type){
+      case Hls.ErrorTypes.NETWORK_ERROR:
+        if(networkRetries < 3){
+          networkRetries++;
+          hls.startLoad(); // retry loading the current position
+        } else {
+          showPlayerPlaceholder();
+        }
+        break;
+      case Hls.ErrorTypes.MEDIA_ERROR:
+        hls.recoverMediaError(); // built-in hls.js recovery for decode errors
+        break;
+      default:
+        showPlayerPlaceholder();
+        break;
+    }
+  });
+  vid.addEventListener('playing', ()=>{ networkRetries = 0; }); // reset once playback is healthy again
+}
+
 async function mountHlsPlayer(frame, url, subtitleUrl){
   const vid = document.createElement('video');
   vid.id = 'mainVideoEl';
@@ -3497,16 +3592,21 @@ async function mountHlsPlayer(frame, url, subtitleUrl){
   } else {
     try{
       await ensureHlsJs();
-      // Tuned for fast start: small initial buffer target so playback begins
-      // almost immediately, while still allowing normal buffering afterward.
+      // Tuned for smooth playback: enough buffer ahead to absorb network
+      // hiccups without starving, but capped so seeking/switching quality
+      // doesn't feel sluggish from an overly large buffer.
       hlsInstance = new Hls({
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
+        maxBufferSize: 60 * 1000 * 1000, // 60MB cap, avoids unbounded memory growth on long episodes
         startLevel: -1, // let hls.js auto-pick the best starting quality for the connection
-        enableWorker: true
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 30 // discard buffer more than 30s behind playhead, frees memory during long sessions
       });
       hlsInstance.loadSource(url);
       hlsInstance.attachMedia(vid);
+      attachHlsErrorRecovery(hlsInstance, vid);
     }catch(e){
       showPlayerPlaceholder();
       return;
