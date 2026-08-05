@@ -547,6 +547,10 @@
         <div style="font-size:13px; font-weight:800; color:#fff;" data-i18n="player.settingsTitle">Ayarlar</div>
         <button onclick="togglePlayerSettings()" style="background:none;border:none;color:#fff;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
+      <div id="sourceRow" style="margin-bottom:14px;">
+        <div class="settings-label" style="margin-bottom:8px; color:#aaa;">Kaynak</div>
+        <div class="lang-options" id="sourceOptions" style="padding:0;"></div>
+      </div>
       <div id="qualityRow" style="margin-bottom:14px;">
         <div class="settings-label" style="margin-bottom:8px; color:#aaa;" data-i18n="player.quality">Keyfiyyət</div>
         <div class="lang-options" id="qualityOptions" style="padding:0;"></div>
@@ -1787,6 +1791,38 @@ function switchAdminTab(tab){
   if(tab==='system') updateSystemTab();
 }
 
+// Feed kaynağına CORS/Cloudflare engelini aşmak için çoklu sunucu proxy (User-Agent,
+// tarayıcıda fetch ile değiştirilemediği için sunucu tarafı proxy'ler kullanılır).
+const FEED_PROXIES = [
+  (u)=> `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  (u)=> `https://corsproxy.io/?${encodeURIComponent(u)}`,
+  (u)=> `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+  (u)=> `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+  (u)=> u
+];
+
+// Nyaa "view" sayfası URL'ini doğrudan .torrent indirme linkine çevirir.
+function normalizeTorrentUrl(url){
+  if(!url) return '';
+  let m = url.match(/nyaa\.si\/(?:view|download)\/(\d+)/);
+  if(m) return 'https://nyaa.si/download/' + m[1] + '.torrent';
+  return url;
+}
+
+// Hatalı/eksik feed URL'leri için kullanıcıya anlaşılır format ipucu ver.
+function feedUrlHint(feedUrl){
+  if(/nyaa\.si/i.test(feedUrl) && !/q=/.test(feedUrl)){
+    return 'Nyaa RSS için arama terimi gerekli. Doğru format: https://nyaa.si/?page=rss&q=<anime adı>&c=1_2&f=0 — örn: https://nyaa.si/?page=rss&q=Naruto&c=1_2&f=0';
+  }
+  if(/rsshub/i.test(feedUrl) && !/\/nyaa\/search\/.+/.test(feedUrl)){
+    return 'RSSHub için doğru format: https://rsshub.app/nyaa/search/<anime adı> — örn: https://rsshub.app/nyaa/search/Naruto';
+  }
+  if(/animetosho\.org\/api/i.test(feedUrl) && !/q=/.test(feedUrl)){
+    return 'AnimeTosho API için doğru format: https://animetosho.org/api/v1/show?q=<anime adı> — örn: https://animetosho.org/api/v1/show?q=Naruto';
+  }
+  return null;
+}
+
 async function syncFeed() {
   if (!requireAdmin()) return;
   const inputEl = document.getElementById('feedSourceUrlInput');
@@ -1804,32 +1840,43 @@ async function syncFeed() {
   statusEl.textContent = 'Feed senkronize ediliyor...';
   logWrap.innerHTML = '<div class="loading-row"><span class="spinner"></span>Veriler çekiliyor...</div>';
 
+  // Hatalı format ipuçları önceden göster
+  const hint = feedUrlHint(feedUrl);
+  if (hint) {
+    statusEl.style.color = 'var(--danger)';
+    statusEl.textContent = hint;
+    logWrap.innerHTML = `<div class="empty-row" style="color:var(--danger);">${hint}</div>`;
+    return;
+  }
+
   try {
     let items = [];
 
-    // Try fetching directly or via proxy if CORS occurs
+    // Birden çok sunucu proxy üzerinden dene — Nyaa.si Cloudflare ve User-Agent
+    // kontrolü yaptığı için bazı proxy'ler engellenebilir.
     let resText = '';
-    const proxies = [
-      feedUrl,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(feedUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(feedUrl)}`
-    ];
-
-    for (const p of proxies) {
+    for (const makeUrl of FEED_PROXIES) {
       try {
-        const r = await fetch(p);
-        if (r.ok) {
-          resText = await r.text();
+        const p = makeUrl(feedUrl);
+        const r = await fetch(p, { signal: AbortSignal.timeout(15000) });
+        if (!r.ok) continue;
+        let text = await r.text();
+        // allorigins "get" sarmalayıcısı içinde "contents" alanında veri döndürür
+        if (makeUrl.toString().includes('allorigins.win/get')) {
+          try { const j = JSON.parse(text); text = j.contents || text; } catch(e){}
+        }
+        if (text && text.trim().length > 0 && !/cloudflare|Just a moment/i.test(text)) {
+          resText = text;
           break;
         }
       } catch (e) {}
     }
 
     if (!resText) {
-      throw new Error('Feed kaynağına erişilemedi.');
+      throw new Error('Feed kaynağına erişilemedi (Cloudflare/CORS engeli). Farklı bir proxy veya RSSHub adresi deneyin.');
     }
 
-    // Try parsing as JSON first
+    // Önce JSON (AnimeTosho API) olarak dene
     let isJson = false;
     try {
       const json = JSON.parse(resText);
@@ -1837,16 +1884,20 @@ async function syncFeed() {
       const rawList = Array.isArray(json) ? json : (json.items || json.data || [json]);
       items = rawList.map(item => ({
         title: item.title || item.name || 'Bilinmeyen Anime',
-        torrentUrl: item.torrent_url || item.download || item.magnet_uri || item.link || item.url,
+        torrentUrl: normalizeTorrentUrl(item.torrent_url || item.download || item.magnet_uri || item.link || item.url || ''),
         episode: item.episode || item.ep || null
       })).filter(i => i.torrentUrl);
     } catch (e) {
-      // Not JSON, parse as RSS / XML
+      // JSON değil, RSS/XML olarak parse et
       const xml = new DOMParser().parseFromString(resText, "text/xml");
       const xmlItems = xml.querySelectorAll("item");
       xmlItems.forEach(el => {
         const title = el.querySelector("title")?.textContent || '';
-        const torrentUrl = el.querySelector("link")?.textContent || el.querySelector("enclosure")?.getAttribute("url") || '';
+        const link = el.querySelector("link")?.textContent || '';
+        const enclosure = el.querySelector("enclosure")?.getAttribute("url") || '';
+        // Nyaa'da <link> izleme sayfası, gerçek .torrent <enclosure> içindedir.
+        let torrentUrl = /\.torrent/i.test(enclosure) ? enclosure : (/\.torrent/i.test(link) ? link : enclosure || link);
+        torrentUrl = normalizeTorrentUrl(torrentUrl);
         if (title && torrentUrl) {
           items.push({ title, torrentUrl, episode: null });
         }
@@ -1856,7 +1907,7 @@ async function syncFeed() {
     if (items.length === 0) {
       statusEl.style.color = 'var(--danger)';
       statusEl.textContent = 'Feed kaynağında geçerli torrent verisi bulunamadı.';
-      logWrap.innerHTML = '<div class="empty-row">Kayıt bulunamadı</div>';
+      logWrap.innerHTML = '<div class="empty-row">Kayıt bulunamadı — feed adresinin doğru olduğundan emin olun.</div>';
       return;
     }
 
@@ -1895,13 +1946,17 @@ async function syncFeed() {
       }
 
       if (matchedAnime) {
+        // Torrent kaynakları video linkini SİLMEZ — ayrı "torrents" listesine eklenir.
         if (!matchedAnime.episodeSources) matchedAnime.episodeSources = {};
-        matchedAnime.episodeSources[epNum] = { video: item.torrentUrl, subtitle: null };
+        const es = matchedAnime.episodeSources[epNum] = matchedAnime.episodeSources[epNum] || { video: '', subtitle: null, torrents: [] };
+        if (!Array.isArray(es.torrents)) es.torrents = [];
+        if (!es.torrents.includes(item.torrentUrl)) es.torrents.push(item.torrentUrl);
+        if (!matchedAnime.episodes || epNum > matchedAnime.episodes) matchedAnime.episodes = epNum;
         syncedCount++;
         const animeName = matchedAnime.title.english || matchedAnime.title.romaji;
         logHtml += `<div class="al-result" style="font-size:12px;">
           <div class="al-info">
-            <div class="al-title">${animeName} — Bölüm ${epNum}</div>
+            <div class="al-title">${animeName} — Bölüm ${epNum} (torrent)</div>
             <div class="al-meta" style="word-break:break-all;">${item.torrentUrl.slice(0, 60)}...</div>
           </div>
           <span style="color:var(--success); font-weight:800;">OK</span>
@@ -1913,9 +1968,9 @@ async function syncFeed() {
     renderHome();
 
     statusEl.style.color = 'var(--success)';
-    statusEl.textContent = `Senkronizasyon Tamamlandı: ${syncedCount} içerik/bölüm eklendi.`;
+    statusEl.textContent = `Senkronizasyon Tamamlandı: ${syncedCount} torrent kaynağı eklendi.`;
     logWrap.innerHTML = logHtml || '<div class="empty-row">Tüm içerikler önceden eklenmiş.</div>';
-    showToast(`${syncedCount} bölüm senkronize edildi!`);
+    showToast(`${syncedCount} torrent kaynağı senkronize edildi!`);
 
   } catch (err) {
     statusEl.style.color = 'var(--danger)';
@@ -2081,7 +2136,8 @@ function renderAdminDashboard(){
     totalEpisodes += total;
     for(let i=1;i<=total;i++){
       const src = m.episodeSources && m.episodeSources[i];
-      if(!src || !src.video) missingVideo++;
+      const hasSrc = src && (src.video || (src.torrents && src.torrents.length));
+      if(!hasSrc) missingVideo++;
       if(!src || !src.subtitle) missingSubtitle++;
     }
   });
@@ -2105,7 +2161,7 @@ function renderAdminDashboard(){
     const dots = Array.from({length: Math.min(total,50)}, (_,idx)=>{
       const ep = idx+1;
       const src = m.episodeSources && m.episodeSources[ep];
-      const hasVideo = src && src.video;
+      const hasVideo = src && (src.video || (src.torrents && src.torrents.length));
       const hasSub = src && src.subtitle;
       const color = hasVideo && hasSub ? '#6FBF8B' : hasVideo ? '#E8B84B' : '#E2604F';
       return `<span title="Ep ${ep}" style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></span>`;
@@ -2909,7 +2965,8 @@ function renderDetailContent(m, baseEntry){
     }
     let html = '';
     for(let i=1;i<=total;i++){
-      const hasSource = m.episodeSources && m.episodeSources[i] && m.episodeSources[i].video;
+      const epSrc = m.episodeSources && m.episodeSources[i];
+      const hasSource = epSrc && (epSrc.video || (epSrc.torrents && epSrc.torrents.length));
       const isWatched = !!state.episodeProgress[m.id+':'+i];
       html += `
       <div class="ep-row">
@@ -3323,9 +3380,12 @@ function saveEpisodeSource(){
   }
   if(!target) return;
 
-  const hadSourceBefore = !!(target.episodeSources && target.episodeSources[editingEpisodeNum] && target.episodeSources[editingEpisodeNum].video);
+  const prevEp = target.episodeSources && target.episodeSources[editingEpisodeNum];
+  const hadSourceBefore = !!(prevEp && prevEp.video);
   if(!target.episodeSources) target.episodeSources = {};
-  target.episodeSources[editingEpisodeNum] = { video, subtitle, qualities };
+  // Torrent kaynakları korunur — admin video düzenlerken senkronize edilen torrentler silinmez.
+  const keepTorrents = prevEp && Array.isArray(prevEp.torrents) ? prevEp.torrents : [];
+  target.episodeSources[editingEpisodeNum] = { video, subtitle, qualities, torrents: keepTorrents };
   saveLibrary();
 
   // Only fire a "new episode" notification the first time a video is attached.
@@ -3632,26 +3692,40 @@ function mountWebTorrentPlayer(frame, url, subtitleUrl){
   attachPlayerBehaviors(vid, frame);
 }
 
+let currentEpisodeSourceUrl = null;
+
 function loadEpisodeIntoPlayer(episodeNum){
   const frame = document.getElementById('playerFrame');
   const src = currentDetail && currentDetail.episodeSources ? currentDetail.episodeSources[episodeNum] : null;
 
   teardownPlayer();
+  currentEpisodeSourceUrl = null;
 
-  if(!src || !src.video){
+  const torrentList = (src && Array.isArray(src.torrents)) ? src.torrents.filter(Boolean) : [];
+  const hasVideo = !!(src && src.video);
+
+  if(!src || (!hasVideo && torrentList.length === 0)){
     showPlayerPlaceholder();
     return;
   }
 
-  const info = detectSourceType(src.video);
-  if(info.type === 'youtube'){
-    mountYouTubePlayer(frame, info.id);
-  } else if(info.type === 'hls'){
-    mountHlsPlayer(frame, info.url, src.subtitle);
-  } else if(info.type === 'webtorrent'){
-    mountWebTorrentPlayer(frame, info.url, src.subtitle);
+  // TORRENT ÖNCELİĞİ: torrent kaynağı varsa her zaman önce torrent oynatılır.
+  // Eski video linki korunur, kullanıcı "Kaynak" seçiciden değiştirebilir.
+  if(torrentList.length > 0){
+    currentEpisodeSourceUrl = torrentList[0];
+    mountWebTorrentPlayer(frame, torrentList[0], src.subtitle);
   } else {
-    mountDirectPlayer(frame, info.url, src.subtitle);
+    const info = detectSourceType(src.video);
+    currentEpisodeSourceUrl = src.video;
+    if(info.type === 'youtube'){
+      mountYouTubePlayer(frame, info.id);
+    } else if(info.type === 'hls'){
+      mountHlsPlayer(frame, info.url, src.subtitle);
+    } else if(info.type === 'webtorrent'){
+      mountWebTorrentPlayer(frame, info.url, src.subtitle);
+    } else {
+      mountDirectPlayer(frame, info.url, src.subtitle);
+    }
   }
 
   buildPlayerSettingsPanel(src);
@@ -4128,6 +4202,27 @@ function renderPlayerEpisodeList(){
 }
 
 function buildPlayerSettingsPanel(src){
+  // SOURCE: torrent kaynakları (önce) + eski video linki. Torrent önceliklidir.
+  const srcWrap = document.getElementById('sourceOptions');
+  const srcRow = document.getElementById('sourceRow');
+  const torrentList = (src && Array.isArray(src.torrents)) ? src.torrents.filter(Boolean) : [];
+  const hasVideo = !!(src && src.video);
+  if(torrentList.length > 0 || hasVideo){
+    srcRow.classList.remove('hidden');
+    let html = '';
+    torrentList.forEach((turl, i)=>{
+      const active = turl === currentEpisodeSourceUrl;
+      html += `<button class="option-pill ${active?'active':''}" onclick="switchEpisodeSource('${turl.replace(/'/g,"\\'")}')">⚡ Torrent ${torrentList.length>1?(i+1):''}</button>`;
+    });
+    if(hasVideo){
+      const active = src.video === currentEpisodeSourceUrl;
+      html += `<button class="option-pill ${active?'active':''}" onclick="switchEpisodeSource('${src.video.replace(/'/g,"\\'")}')">${state.lang==='en'?'Video link':'Video link'}</button>`;
+    }
+    srcWrap.innerHTML = html;
+  } else {
+    srcRow.classList.add('hidden');
+  }
+
   // Quality: only shown if the admin provided multiple resolution links (src.qualities),
   // e.g. {qualities: {"1080p": "...", "720p": "...", "480p": "..."}}
   const qWrap = document.getElementById('qualityOptions');
@@ -4155,6 +4250,37 @@ function buildPlayerSettingsPanel(src){
   } else {
     sRow.classList.add('hidden');
   }
+}
+
+// Kaynak (torrent / video) değiştirme: mevcut oynatıcıyı yıkıp yeni kaynağı yükler.
+function switchEpisodeSource(url){
+  if(!url || url === currentEpisodeSourceUrl) return;
+  const frame = document.getElementById('playerFrame');
+  const src = currentDetail && currentDetail.episodeSources ? currentDetail.episodeSources[currentEpisodeNum] : null;
+  const vid = document.getElementById('mainVideoEl');
+  const savedTime = vid && isFinite(vid.currentTime) && vid.currentTime > 0 ? vid.currentTime : 0;
+  const info = detectSourceType(url);
+
+  currentEpisodeSourceUrl = url;
+  teardownPlayer();
+
+  if(info.type === 'webtorrent'){
+    mountWebTorrentPlayer(frame, info.url, src ? src.subtitle : null);
+  } else if(info.type === 'youtube'){
+    mountYouTubePlayer(frame, info.id);
+  } else if(info.type === 'hls'){
+    mountHlsPlayer(frame, info.url, src ? src.subtitle : null);
+  } else {
+    mountDirectPlayer(frame, info.url, src ? src.subtitle : null);
+  }
+
+  if(info.type !== 'webtorrent' && savedTime > 0){
+    const nv = document.getElementById('mainVideoEl');
+    if(nv){
+      nv.addEventListener('loadedmetadata', ()=>{ try{ nv.currentTime = savedTime; }catch(e){} }, {once:true});
+    }
+  }
+  buildPlayerSettingsPanel(src);
 }
 
 function switchQuality(url){
