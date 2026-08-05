@@ -559,6 +559,10 @@
         <div class="settings-label" style="margin-bottom:8px; color:#aaa;" data-i18n="player.speed">Sürət</div>
         <div class="lang-options" id="speedOptions" style="padding:0;"></div>
       </div>
+      <div id="bufferRow" style="margin-bottom:14px;">
+        <div class="settings-label" style="margin-bottom:8px; color:#aaa;">Tampon (P2P)</div>
+        <div class="lang-options" id="bufferOptions" style="padding:0;"></div>
+      </div>
     </div>
   </div>
 
@@ -680,13 +684,23 @@
       <div class="settings-label">Otomatik Feed / RSS Senkronizasyonu</div>
       <div class="settings-card" style="padding:16px;">
         <div class="settings-row-sub" style="margin-bottom:12px; font-size:12.5px; color:var(--text-dim);">
-          Nyaa.si, AnimeTosho veya harici JSON/RSS torrent feed URL'sini girin. Sistem otomatik olarak .torrent bağlantılarını okuyacak ve kataloğa kaydedecektir.
+          <b>Varsayılan davranış:</b> İzleyici bir bölüme tıkladığında o bölümün kaynağı otomatik olarak feed'den aranıp arka planda çekilir (tüm sezon bir kerede çekilmez). Aşağıdaki hazır İngilizce-altyazılı şablonlardan birini seçip kaydetmen yeterli.
         </div>
         <div style="margin-bottom:12px;">
-          <input type="text" id="feedSourceUrlInput" placeholder="https://nyaa.si/?page=rss veya https://animetosho.org/api/v1/show..." class="auth-input" style="width:100%;">
+          <select id="feedPresetSelect" class="auth-input" style="width:100%; margin-bottom:10px;" onchange="applyFeedPreset(this.value)">
+            <option value="">— Hazır Şablon Seç —</option>
+            <option value="nyaa_en">Nyaa.si — İngilizce Altyazılı (önerilen)</option>
+            <option value="nyaa_all">Nyaa.si — Tümü</option>
+            <option value="animetosho">AnimeTosho API</option>
+            <option value="rsshub">RSSHub — Nyaa</option>
+          </select>
+          <input type="text" id="feedSourceUrlInput" placeholder="Önce hazır şablon seç veya feed URL gir..." class="auth-input" style="width:100%;">
         </div>
         <div style="display:flex; gap:10px;">
-          <button class="btn-primary" style="flex:1; padding:12px;" onclick="syncFeed()">Akışı Senkronize Et (Sync Feed)</button>
+          <button class="btn-primary" style="flex:1; padding:12px;" onclick="saveFeedConfig()">Feed Yapılandırmasını Kaydet</button>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:8px;">
+          <button class="btn-ghost" style="flex:1; padding:10px; font-size:12px;" onclick="syncFeed()">Tümünü Şimdi Senkronizele (opsiyonel)</button>
         </div>
         <div id="feedSyncStatus" style="margin-top:12px; font-size:12.5px; font-weight:700; display:none;"></div>
       </div>
@@ -1126,7 +1140,8 @@ let state = {
   animeStatuses: {}, // { animeId: 'watching'|'planned'|'completed'|'on_hold'|'dropped' }
   userRatings: {},   // { animeId: 1-10 }
   communityRatings: {}, // { animeId: {avg, count} } — aggregated from all users
-  episodeProgress: {}   // { "animeId:episode": true }
+  episodeProgress: {},  // { "animeId:episode": true }
+  feedConfig: null      // { provider:'nyaa-en', url:'...' } — admin feed kaynağı
 };
 
 // ================= ADMIN AUTH =================
@@ -1420,7 +1435,8 @@ async function loadCommunityRatings(){
 function saveSettings(){
   // Personal prefs only — device-local, not shared across users.
   try{ localStorage.setItem('anivax_settings', JSON.stringify({
-    lang: state.lang, theme: state.theme, autoplay: state.autoplay, skipIntro: state.skipIntro
+    lang: state.lang, theme: state.theme, autoplay: state.autoplay, skipIntro: state.skipIntro,
+    feedConfig: state.feedConfig || null
   })); }catch(e){}
 }
 
@@ -1579,7 +1595,31 @@ function showToast(msg){
 }
 
 // ================= ANILIST API =================
+// Küçük gecikmeleri önlemek için aynı isteği tekrar tekrar AniList'ten çekme:
+// sonuçları localStorage'a önbellekler (6 saat geçerli). Site akıcılığını artırır.
+const ANILIST_CACHE_KEY = 'anivax_anilist_cache_v1';
+let anilistCache = { search:{}, byId:{}, trending:null };
+function loadAnilistCache(){
+  try{
+    const raw = localStorage.getItem(ANILIST_CACHE_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      anilistCache = { search: parsed.search || {}, byId: parsed.byId || {}, trending: parsed.trending || null };
+    }
+  }catch(e){ anilistCache = { search:{}, byId:{}, trending:null }; }
+}
+function persistAnilistCache(){
+  try{ localStorage.setItem(ANILIST_CACHE_KEY, JSON.stringify(anilistCache)); }catch(e){}
+}
+function anilistCacheFresh(entry){
+  return entry && (Date.now() - entry.ts) < 6*60*60*1000;
+}
+
 async function anilistSearch(query){
+  const q = String(query || '').toLowerCase().trim();
+  if(!q) return [];
+  const cached = anilistCache.search[q];
+  if(anilistCacheFresh(cached)) return cached.data;
   const gql = `
     query ($search: String) {
       Page(page:1, perPage:12){
@@ -1612,12 +1652,17 @@ async function anilistSearch(query){
     body: JSON.stringify({query: gql, variables:{search: query}})
   });
   const json = await res.json();
-  return json.data && json.data.Page ? json.data.Page.media : [];
+  const data = (json.data && json.data.Page) ? json.data.Page.media : [];
+  anilistCache.search[q] = { data, ts: Date.now() };
+  persistAnilistCache();
+  return data;
 }
 
 // Fetches one anime by its exact AniList id — used when we already know the id
 // (e.g. from a relations edge) and don't want to risk a title-search mismatch.
 async function anilistById(id){
+  const cached = anilistCache.byId[id];
+  if(anilistCacheFresh(cached)) return cached.data;
   const gql = `
     query ($id: Int) {
       Media(id:$id, type: ANIME){
@@ -1633,10 +1678,14 @@ async function anilistById(id){
     body: JSON.stringify({query: gql, variables:{id}})
   });
   const json = await res.json();
-  return json.data ? json.data.Media : null;
+  const data = json.data ? json.data.Media : null;
+  anilistCache.byId[id] = { data, ts: Date.now() };
+  persistAnilistCache();
+  return data;
 }
 
 async function anilistTrending(){
+  if(anilistCacheFresh(anilistCache.trending)) return anilistCache.trending.data;
   const gql = `
     query {
       Page(page:1, perPage:12){
@@ -1658,7 +1707,10 @@ async function anilistTrending(){
     body: JSON.stringify({query: gql})
   });
   const json = await res.json();
-  return json.data && json.data.Page ? json.data.Page.media : [];
+  const data = json.data && json.data.Page ? json.data.Page.media : [];
+  anilistCache.trending = { data, ts: Date.now() };
+  persistAnilistCache();
+  return data;
 }
 
 function stripHtml(html){
@@ -1785,10 +1837,61 @@ function switchAdminTab(tab){
 
   if(tab==='dashboard') renderAdminDashboard();
   if(tab==='add' && document.getElementById('adminSearchInput').value.trim()==='') renderAdminTrending();
+  if(tab==='feed') prefillFeedConfig();
   if(tab==='seasons') renderSeasonBaseList();
   if(tab==='categories') renderCategoryList();
   if(tab==='manage') renderLibraryManage();
   if(tab==='system') updateSystemTab();
+}
+
+// Feed admin sekmesi açıldığında kayıtlı yapılandırmayı veya önerilen şablonu göster.
+function prefillFeedConfig(){
+  const inputEl = document.getElementById('feedSourceUrlInput');
+  const selEl = document.getElementById('feedPresetSelect');
+  if(!inputEl || !selEl) return;
+  if(state.feedConfig && state.feedConfig.url){
+    inputEl.value = state.feedConfig.url;
+    selEl.value = state.feedConfig.provider || 'nyaa_en';
+  } else if(!inputEl.value){
+    selEl.value = 'nyaa_en';
+    inputEl.value = FEED_PRESETS.nyaa_en.build('<anime>');
+  }
+}
+
+// Hazır şablon seçilince URL alanını doldurur (kullanıcı düzenleyebilir).
+function applyFeedPreset(key){
+  if(!key || !FEED_PRESETS[key]) return;
+  document.getElementById('feedSourceUrlInput').value = FEED_PRESETS[key].build('<anime>');
+  showToast(state.lang==='en' ? 'Preset applied — <anime> is replaced with the anime name' : 'Şablon uygulandı — <anime> yerine anime adı gelecek');
+}
+
+// Feed yapılandırmasını kaydeder — bölüm tıklanınca otomatik kaynak araması bunu kullanır.
+function saveFeedConfig(){
+  if(!requireAdmin()) return;
+  const inputEl = document.getElementById('feedSourceUrlInput');
+  const selEl = document.getElementById('feedPresetSelect');
+  const url = inputEl ? inputEl.value.trim() : '';
+  if(!url){
+    showToast('Lütfen önce bir şablon seç veya feed URL gir');
+    return;
+  }
+  const hint = feedUrlHint(url);
+  if(hint && /<anime>/.test(url)){
+    // Şablon URL'lerini kaydetmeye İZİN ver — sadece bilgi ver.
+    showToast(hint);
+  } else if(hint){
+    showToast(hint);
+    return;
+  }
+  // Şablon seçiliyse provider olarak saklanır; özel URL'de <anime> yerine
+  // anime adı otomatik konur (bkz. getFeedSource).
+  state.feedConfig = { provider: selEl ? selEl.value : 'custom', url };
+  saveSettings();
+  const statusEl = document.getElementById('feedSyncStatus');
+  statusEl.style.display = 'block';
+  statusEl.style.color = 'var(--success)';
+  statusEl.textContent = 'Feed yapılandırması kaydedildi. İzleyici bölüme tıklayınca kaynak otomatik aranacak.';
+  showToast('Feed yapılandırması kaydedildi!');
 }
 
 // Feed kaynağına CORS/Cloudflare engelini aşmak için çoklu sunucu proxy (User-Agent,
@@ -1801,6 +1904,159 @@ const FEED_PROXIES = [
   (u)=> u
 ];
 
+// HAZIR FEED ŞABLONLARI — admin yanlış URL girmesin diye önceden tanımlı.
+// İngilizce altyazılı kaynaklar için Nyaa kategori 1_2 (English-translated),
+// remakes hariç (f=0). <title> yerine anime adı konur.
+const FEED_PRESETS = {
+  nyaa_en:  { label:'Nyaa.si — İngilizce Altyazılı', build:(t)=> `https://nyaa.si/?page=rss&q=${encodeURIComponent(t)}&c=1_2&f=0` },
+  nyaa_all: { label:'Nyaa.si — Tümü', build:(t)=> `https://nyaa.si/?page=rss&q=${encodeURIComponent(t)}` },
+  animetosho:{ label:'AnimeTosho API', build:(t)=> `https://animetosho.org/api/v1/show?q=${encodeURIComponent(t)}` },
+  rsshub:   { label:'RSSHub — Nyaa', build:(t)=> `https://rsshub.app/nyaa/search/${encodeURIComponent(t)}` }
+};
+
+// Admin kaydedilmiş feed yapılandırması yoksa İngilizce-altyazılı Nyaa kullanılır.
+// Kayıtlı şablonlar için anime adı otomatik yerine konur; özel URL'de <anime> değişir.
+function getFeedSource(animeTitle){
+  const cfg = state && state.feedConfig ? state.feedConfig : null;
+  const title = (animeTitle || '').trim();
+  if(cfg && cfg.provider && FEED_PRESETS[cfg.provider]){
+    return { url: FEED_PRESETS[cfg.provider].build(title), label: FEED_PRESETS[cfg.provider].label };
+  }
+  if(cfg && cfg.url){
+    const url = cfg.url.replace(/<anime>/g, encodeURIComponent(title));
+    return { url, label: cfg.provider || 'özel' };
+  }
+  const preset = FEED_PRESETS.nyaa_en;
+  return { url: preset.build(title || 'anime'), label: preset.label };
+}
+
+// Feed URL'ini proxy zinciri üzerinden çeker (Nyaa Cloudflare/CORS engelini aşar).
+async function fetchFeedText(feedUrl){
+  let lastErr = null;
+  for (const makeUrl of FEED_PROXIES) {
+    try {
+      const p = makeUrl(feedUrl);
+      const r = await fetch(p, { signal: AbortSignal.timeout(15000) });
+      if (!r.ok) continue;
+      let text = await r.text();
+      if (makeUrl.toString().includes('allorigins.win/get')) {
+        try { const j = JSON.parse(text); text = j.contents || text; } catch(e){}
+      }
+      if (text && text.trim().length > 0 && !/cloudflare|Just a moment/i.test(text)) {
+        return text;
+      }
+    } catch (e) { lastErr = e; }
+  }
+  throw new Error('Feed kaynağına erişilemedi (Cloudflare/CORS engeli).');
+}
+
+// .torrent dosyasını proxy üzerinden binary (arrayBuffer) olarak indirir —
+// tarayıcı Nyaa.si'ye doğrudan istek atamadığı için proxy zorunlu.
+async function fetchTorrentBuffer(torrentUrl){
+  if(!/\.torrent(\?|$)/i.test(torrentUrl)) return null;
+  for (const makeUrl of FEED_PROXIES) {
+    try {
+      const p = makeUrl(torrentUrl);
+      const r = await fetch(p, { signal: AbortSignal.timeout(12000) });
+      if (!r.ok) continue;
+      const buf = await r.arrayBuffer();
+      if (buf && buf.byteLength > 100) return buf;
+    } catch (e) {}
+  }
+  return null;
+}
+
+// RSS/XML veya JSON feed içeriğini ortak kayıt listesine çevirir.
+function parseFeedContent(resText){
+  let items = [];
+  try {
+    const json = JSON.parse(resText);
+    const rawList = Array.isArray(json) ? json : (json.items || json.data || [json]);
+    items = rawList.map(item => ({
+      title: item.title || item.name || 'Bilinmeyen Anime',
+      torrentUrl: normalizeTorrentUrl(item.torrent_url || item.download || item.magnet_uri || item.link || item.url || ''),
+      episode: item.episode || item.ep || null
+    })).filter(i => i.torrentUrl);
+  } catch (e) {
+    const xml = new DOMParser().parseFromString(resText, "text/xml");
+    xml.querySelectorAll("item").forEach(el => {
+      const title = el.querySelector("title")?.textContent || '';
+      const link = el.querySelector("link")?.textContent || '';
+      const enclosure = el.querySelector("enclosure")?.getAttribute("url") || '';
+      let torrentUrl = /\.torrent/i.test(enclosure) ? enclosure : (/\.torrent/i.test(link) ? link : enclosure || link);
+      torrentUrl = normalizeTorrentUrl(torrentUrl);
+      if (title && torrentUrl) items.push({ title, torrentUrl, episode: null });
+    });
+  }
+  return items;
+}
+
+// Title içindeki bölüm numarasını tespit eder.
+function extractEpisodeNumber(title){
+  const m = String(title).match(/(?:E|Ep|Bölüm|Episode|#|\s)(\d{1,4})(?:\s|\[|\(|\.|$)/i);
+  return m ? parseInt(m[1]) : null;
+}
+
+// LAZY (ON-DEMAND) KAYNAK ARAMA: kullanıcı bir bölüme tıkladığında sadece O
+// bölümün torrentini feed'den arar. Tüm sezonu tek seferde çekmez.
+// Önce yapılandırılan feed denenir; bulunamazsa diğer İngilizce-altyazılı
+// kaynaklara (Nyaa EN, Nyaa tümü, AnimeTosho, RSSHub) sırayla bakar.
+async function findTorrentForEpisode(anime, epNum){
+  if(!anime) return null;
+  const title = (anime.title.english || anime.title.romaji || anime.title.native || '').trim();
+  if(!title) return null;
+
+  // Yapılandırılmış feed + varsayılan İngilizce-altyazılı yedekler
+  const configured = getFeedSource(title);
+  const feeds = [
+    { url: configured.url, label: configured.label },
+    { url: FEED_PRESETS.nyaa_en.build(title), label: FEED_PRESETS.nyaa_en.label },
+    { url: FEED_PRESETS.animetosho.build(title), label: FEED_PRESETS.animetosho.label },
+    { url: FEED_PRESETS.rsshub.build(title), label: FEED_PRESETS.rsshub.label }
+  ];
+  const seen = new Set();
+  const searchWords = title.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+
+  for(const feed of feeds){
+    if(seen.has(feed.url)) continue;
+    seen.add(feed.url);
+    try {
+      const text = await fetchFeedText(feed.url);
+      const items = parseFeedContent(text);
+      for(const item of items){
+        const itemTitle = item.title || '';
+        const low = itemTitle.toLowerCase();
+        // Başlık anime adıyla eşleşmeli
+        const nameMatch = searchWords.some(w => low.includes(w)) || low.includes(title.toLowerCase().slice(0, 12));
+        if(!nameMatch) continue;
+        // Bölüm numarası hedefe eşit olmalı
+        const ep = item.episode || extractEpisodeNumber(itemTitle);
+        if(ep !== epNum) continue;
+        if(item.torrentUrl) return item.torrentUrl;
+      }
+    } catch(e) {}
+  }
+  return null;
+}
+
+// Bölüm açıldığında kaynak yoksa arka planda o bölümü feed'den çekip oynatır.
+async function lazyFetchEpisodeSource(episodeNum){
+  if(!currentDetail) return false;
+  const anime = currentDetail;
+  const url = await findTorrentForEpisode(anime, episodeNum);
+  if(!url) return false;
+  // Kullanıcı bu sırada başka bölüme geçtiyse kaydetme
+  if(currentEpisodeNum !== episodeNum) return false;
+
+  if(!anime.episodeSources) anime.episodeSources = {};
+  const es = anime.episodeSources[episodeNum] = anime.episodeSources[episodeNum] || { video:'', subtitle:null, torrents:[] };
+  if(!Array.isArray(es.torrents)) es.torrents = [];
+  if(!es.torrents.includes(url)) es.torrents.push(url);
+  if(!anime.episodes || episodeNum > anime.episodes) anime.episodes = episodeNum;
+  saveLibrary();
+  return true;
+}
+
 // Nyaa "view" sayfası URL'ini doğrudan .torrent indirme linkine çevirir.
 function normalizeTorrentUrl(url){
   if(!url) return '';
@@ -1811,6 +2067,9 @@ function normalizeTorrentUrl(url){
 
 // Hatalı/eksik feed URL'leri için kullanıcıya anlaşılır format ipucu ver.
 function feedUrlHint(feedUrl){
+  if(/<anime>/.test(feedUrl)){
+    return 'URL içinde <anime> yer tutucusu var — "Tümünü Şimdi Senkronizele" için burayı gerçek anime adıyla değiştirin. (Bölüm-temelli otomatik arama için kaydedebilirsiniz.)';
+  }
   if(/nyaa\.si/i.test(feedUrl) && !/q=/.test(feedUrl)){
     return 'Nyaa RSS için arama terimi gerekli. Doğru format: https://nyaa.si/?page=rss&q=<anime adı>&c=1_2&f=0 — örn: https://nyaa.si/?page=rss&q=Naruto&c=1_2&f=0';
   }
@@ -1850,59 +2109,10 @@ async function syncFeed() {
   }
 
   try {
-    let items = [];
-
     // Birden çok sunucu proxy üzerinden dene — Nyaa.si Cloudflare ve User-Agent
     // kontrolü yaptığı için bazı proxy'ler engellenebilir.
-    let resText = '';
-    for (const makeUrl of FEED_PROXIES) {
-      try {
-        const p = makeUrl(feedUrl);
-        const r = await fetch(p, { signal: AbortSignal.timeout(15000) });
-        if (!r.ok) continue;
-        let text = await r.text();
-        // allorigins "get" sarmalayıcısı içinde "contents" alanında veri döndürür
-        if (makeUrl.toString().includes('allorigins.win/get')) {
-          try { const j = JSON.parse(text); text = j.contents || text; } catch(e){}
-        }
-        if (text && text.trim().length > 0 && !/cloudflare|Just a moment/i.test(text)) {
-          resText = text;
-          break;
-        }
-      } catch (e) {}
-    }
-
-    if (!resText) {
-      throw new Error('Feed kaynağına erişilemedi (Cloudflare/CORS engeli). Farklı bir proxy veya RSSHub adresi deneyin.');
-    }
-
-    // Önce JSON (AnimeTosho API) olarak dene
-    let isJson = false;
-    try {
-      const json = JSON.parse(resText);
-      isJson = true;
-      const rawList = Array.isArray(json) ? json : (json.items || json.data || [json]);
-      items = rawList.map(item => ({
-        title: item.title || item.name || 'Bilinmeyen Anime',
-        torrentUrl: normalizeTorrentUrl(item.torrent_url || item.download || item.magnet_uri || item.link || item.url || ''),
-        episode: item.episode || item.ep || null
-      })).filter(i => i.torrentUrl);
-    } catch (e) {
-      // JSON değil, RSS/XML olarak parse et
-      const xml = new DOMParser().parseFromString(resText, "text/xml");
-      const xmlItems = xml.querySelectorAll("item");
-      xmlItems.forEach(el => {
-        const title = el.querySelector("title")?.textContent || '';
-        const link = el.querySelector("link")?.textContent || '';
-        const enclosure = el.querySelector("enclosure")?.getAttribute("url") || '';
-        // Nyaa'da <link> izleme sayfası, gerçek .torrent <enclosure> içindedir.
-        let torrentUrl = /\.torrent/i.test(enclosure) ? enclosure : (/\.torrent/i.test(link) ? link : enclosure || link);
-        torrentUrl = normalizeTorrentUrl(torrentUrl);
-        if (title && torrentUrl) {
-          items.push({ title, torrentUrl, episode: null });
-        }
-      });
-    }
+    const resText = await fetchFeedText(feedUrl);
+    const items = parseFeedContent(resText);
 
     if (items.length === 0) {
       statusEl.style.color = 'var(--danger)';
@@ -1915,11 +2125,7 @@ async function syncFeed() {
     let logHtml = '';
 
     for (const item of items) {
-      let epNum = item.episode;
-      if (!epNum) {
-        const epMatch = item.title.match(/(?:E|Ep|Bölüm|#|\s)(\d{1,4})(?:\s|\[|\(|\.|$)/i);
-        epNum = epMatch ? parseInt(epMatch[1]) : 1;
-      }
+      let epNum = item.episode || extractEpisodeNumber(item.title) || 1;
 
       const cleanTitle = item.title.replace(/\[.*?\]|\(.*?\)/g, '').trim().toLowerCase();
       let matchedAnime = state.library.find(m => {
@@ -3510,18 +3716,16 @@ class WebTorrentPlayer {
 
     let inputData = torrentSource;
 
-    // Rule 2: If direct .torrent URL, fetch as arrayBuffer to bypass magnet metadata lookup delay
-    if (typeof torrentSource === 'string' && (/\.torrent(\?|$)/i.test(torrentSource) || torrentSource.startsWith('http'))) {
-      if (/\.torrent(\?|$)/i.test(torrentSource)) {
-        this.setStatus('.torrent dosyası doğrudan indiriliyor...');
-        try {
-          const res = await fetch(torrentSource);
-          if (!res.ok) throw new Error('Torrent dosyası indirilemedi HTTP ' + res.status);
-          inputData = await res.arrayBuffer();
-        } catch (err) {
-          this.setStatus('Torrent indirme uyarısı, URL deneniyor...', false);
-          inputData = torrentSource;
-        }
+    // Rule 2: If direct .torrent URL, fetch as arrayBuffer to bypass magnet metadata lookup delay.
+    // Proxy üzerinden indirilir — tarayıcı doğrudan Nyaa.si'ye erişemez (Cloudflare/CORS).
+    if (typeof torrentSource === 'string' && /\.torrent(\?|$)/i.test(torrentSource)) {
+      this.setStatus('.torrent dosyası doğrudan indiriliyor...');
+      const buf = await fetchTorrentBuffer(torrentSource);
+      if (buf) {
+        inputData = buf;
+      } else {
+        this.setStatus('Torrent indirme uyarısı, URL deneniyor...', false);
+        inputData = torrentSource;
       }
     }
 
@@ -3540,11 +3744,17 @@ class WebTorrentPlayer {
         return;
       }
 
-      // Prioritize mp4 / x264, or largest video file
+      // Prioritize: x264/AVC + mp4 over mkv over largest fallback (Rule 7)
       candidates.sort((a, b) => {
-        const aMp4 = /\.mp4$/i.test(a.name) ? 2 : 1;
-        const bMp4 = /\.mp4$/i.test(b.name) ? 2 : 1;
-        if (aMp4 !== bMp4) return bMp4 - aMp4;
+        const score = (f) => {
+          let s = 0;
+          if (/\.mp4$/i.test(f.name)) s += 100;
+          if (/x264|avc|h\.264|hevc|h\.265|10bit/i.test(f.name)) s += 50;
+          if (/\.mkv$/i.test(f.name)) s += 30;
+          return s;
+        };
+        const diff = score(b) - score(a);
+        if (diff !== 0) return diff;
         return b.length - a.length;
       });
 
@@ -3585,10 +3795,16 @@ class WebTorrentPlayer {
     if (!this.torrent || !this.file || !this.videoElement) return;
 
     const fileOffsetPieces = Math.floor(this.file.offset / this.torrent.pieceLength);
-    const filePieceCount = Math.ceil(this.file.length / this.torrent.pieceLength);
-    const totalDurationSec = this.videoElement.duration || 1200;
+    const filePieceCount = Math.max(1, Math.ceil(this.file.length / this.torrent.pieceLength));
+    const totalDurationSec = (this.videoElement.duration && isFinite(this.videoElement.duration)) ? this.videoElement.duration : 0;
 
-    const secondsPerPiece = totalDurationSec / filePieceCount;
+    // Süre henüz bilinmiyorsa tahmini bitrate (~1.5Mbps) ile piece/sn hesabı yap.
+    // Böylece metadata gelmeden önce de kritik pencere doğru konumlanır.
+    let secondsPerPiece = totalDurationSec > 0
+      ? totalDurationSec / filePieceCount
+      : Math.max(1, this.torrent.pieceLength / 190000);
+    secondsPerPiece = Math.max(0.5, secondsPerPiece);
+
     const currentPieceIndex = fileOffsetPieces + Math.floor(currentTimeSec / secondsPerPiece);
 
     const targetSec = overrideBufferSec || this.getBufferTargetSec();
@@ -3694,6 +3910,26 @@ function mountWebTorrentPlayer(frame, url, subtitleUrl){
 
 let currentEpisodeSourceUrl = null;
 
+function showPlayerPlaceholder(){
+  removeVideoElements();
+  const frame = document.getElementById('playerFrame');
+  const ph = document.createElement('div');
+  ph.id = 'playerPlaceholder';
+  ph.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;width:100%;height:100%;';
+  ph.innerHTML = `<svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#8B8F9C" stroke-width="1.6"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg><div class="ph-text">${t('player.noSource')}</div>`;
+  frame.appendChild(ph);
+}
+
+function showPlayerLoading(msg){
+  removeVideoElements();
+  const frame = document.getElementById('playerFrame');
+  const ph = document.createElement('div');
+  ph.id = 'playerPlaceholder';
+  ph.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;width:100%;height:100%;';
+  ph.innerHTML = `<div class="spinner" style="width:28px;height:28px;border-width:3px;"></div><div class="ph-text" style="font-size:13px;">${msg || 'Kaynak aranıyor...'}</div>`;
+  frame.appendChild(ph);
+}
+
 function loadEpisodeIntoPlayer(episodeNum){
   const frame = document.getElementById('playerFrame');
   const src = currentDetail && currentDetail.episodeSources ? currentDetail.episodeSources[episodeNum] : null;
@@ -3705,7 +3941,16 @@ function loadEpisodeIntoPlayer(episodeNum){
   const hasVideo = !!(src && src.video);
 
   if(!src || (!hasVideo && torrentList.length === 0)){
-    showPlayerPlaceholder();
+    // KAYNAK YOK: kullanıcı bölüme tıkladı — arka planda o bölümün torrentini
+    // feed'den ara, bulunca hemen oynatmaya başla.
+    showPlayerLoading(state.lang==='en' ? 'Searching for episode source...' : (state.lang==='tr' ? 'Bölüm kaynağı aranıyor...' : 'Bölüm üçün mənbə axtarılır...'));
+    lazyFetchEpisodeSource(episodeNum).then(found => {
+      if(found && currentEpisodeNum === episodeNum){
+        loadEpisodeIntoPlayer(episodeNum);
+      } else if(currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl')){
+        showPlayerPlaceholder();
+      }
+    });
     return;
   }
 
@@ -3729,16 +3974,6 @@ function loadEpisodeIntoPlayer(episodeNum){
   }
 
   buildPlayerSettingsPanel(src);
-}
-
-function showPlayerPlaceholder(){
-  removeVideoElements();
-  const frame = document.getElementById('playerFrame');
-  const ph = document.createElement('div');
-  ph.id = 'playerPlaceholder';
-  ph.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;width:100%;height:100%;';
-  ph.innerHTML = `<svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#8B8F9C" stroke-width="1.6"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg><div class="ph-text">${t('player.noSource')}</div>`;
-  frame.appendChild(ph);
 }
 
 function removeVideoElements(){
@@ -4250,6 +4485,31 @@ function buildPlayerSettingsPanel(src){
   } else {
     sRow.classList.add('hidden');
   }
+
+  // Buffer mode — yalnızca WebTorrent (P2P) akışında geçerlidir.
+  // auto: 3 sn (yavaşsa 5-6 sn'ye esner) / fast: 2 sn / balanced: 4 sn / stable: 6 sn
+  const bWrap = document.getElementById('bufferOptions');
+  const bRow = document.getElementById('bufferRow');
+  if(activeWebTorrentPlayer){
+    bRow.classList.remove('hidden');
+    const modes = ['auto','fast','balanced','stable'];
+    const cur = activeWebTorrentPlayer.bufferMode || 'auto';
+    bWrap.innerHTML = modes.map(m=>`
+      <button class="option-pill ${m===cur?'active':''}" onclick="setWebTorrentBufferMode('${m}')">${m}</button>
+    `).join('');
+  } else {
+    bRow.classList.add('hidden');
+  }
+}
+
+// Tampon modunu değiştirir ve indirme penceresini yeniden odaklar.
+function setWebTorrentBufferMode(mode){
+  if(!activeWebTorrentPlayer) return;
+  activeWebTorrentPlayer.bufferMode = mode;
+  activeWebTorrentPlayer.focusDownloadWindow(
+    activeWebTorrentPlayer.videoElement ? activeWebTorrentPlayer.videoElement.currentTime || 0 : 0
+  );
+  buildPlayerSettingsPanel(currentDetail && currentDetail.episodeSources ? currentDetail.episodeSources[currentEpisodeNum] : null);
 }
 
 // Kaynak (torrent / video) değiştirme: mevcut oynatıcıyı yıkıp yeni kaynağı yükler.
@@ -4426,6 +4686,7 @@ function bootApp(retriesLeft){
     return;
   }
   loadTranslationCache();
+  loadAnilistCache();
   loadState().then(()=>{
     initToggles();
     // Restore whatever page the URL points to (e.g. a refreshed /anime/21),
