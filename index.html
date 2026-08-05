@@ -1391,7 +1391,6 @@ async function loadState(){
 
   try{ applyI18n(); }catch(e){ console.error('loadState: applyI18n failed', e); }
   try{ applyTheme(); }catch(e){ console.error('loadState: applyTheme failed', e); }
-  try{ mergeTorrentCache(); }catch(e){ console.error('loadState: mergeTorrentCache failed', e); }
   try{ renderHome(); }catch(e){ console.error('loadState: renderHome failed', e); }
 }
 
@@ -1983,21 +1982,6 @@ async function fetchFeedText(feedUrl){
   throw new Error('Kaynak erişilemedi (Cloudflare/CORS). AnimeTosho kaynağını deneyin.');
 }
 
-// .torrent dosyasını binary olarak çekmeye çalışır (yalnızca CORS engeli). Magnet için gerekmez.
-async function fetchTorrentBuffer(torrentUrl){
-  if(!/\.torrent(\?|$)/i.test(torrentUrl)) return null;
-  for (const makeUrl of FEED_PROXIES) {
-    try {
-      const p = makeUrl(torrentUrl);
-      const r = await fetch(p, { signal: AbortSignal.timeout(12000) });
-      if (!r.ok) continue;
-      const buf = await r.arrayBuffer();
-      if (buf && buf.byteLength > 100) return buf;
-    } catch (e) {}
-  }
-  return null;
-}
-
 // info_hash → tarayıcı dostu magnet (yalnızca WSS tracker'ları, WebTorrent UDP/DHT kullanamaz).
 function buildWebTorrentMagnet(infoHash){
   if(!infoHash) return '';
@@ -2075,18 +2059,13 @@ function normalizeTitle(s){
   return String(s||'').replace(/\[.*?\]|\(.*?\)/g,'').replace(/[_.]/g,' ').replace(/\s+/g,' ').trim().toLowerCase();
 }
 
-// Nyaa .torrent linkini oynatılabilir yapar: AnimeTosho (Nyaa'nın İngilizce kategorisini birebir
-// yansıtır) üzerinden aynı yayının info_hash'ini bulup WSS magnet'e çevirir. Nyaa'nın .torrent
-// binary'si tarayıcıdan Cloudflare engeli yüzünden çekilemediği için infohash en hızlı ve tek
-// güvenilir yoldur.
+// Nyaa .torrent linkini AnimeTosho üzerinden info_hash/magnet'e çevirir.
 async function resolveTorrentToPlayable(title, torrentUrl){
-  if(!torrentUrl) return torrentUrl;
-  if(/^magnet:/.test(torrentUrl)) return torrentUrl;
-  if(!title) return torrentUrl;
+  if(!torrentUrl || /^magnet:/.test(torrentUrl) || !title) return torrentUrl;
   try{
     const q = encodeURIComponent(normalizeTitle(title).slice(0, 80));
-    const r = await fetch(`https://feed.animetosho.xyz/json/v1/search?q=${q}&limit=5`, { signal: AbortSignal.timeout(12000) });
-    if(!r.ok) return torrentUrl;
+    const r = await fetch(`https://feed.animetosho.xyz/json/v1/search?q=${q}&limit=5`, { signal: AbortSignal.timeout(10000) });
+    if(!r.ok) return null;
     const json = await r.json();
     const list = json && json.data ? json.data : [];
     for(const it of list){
@@ -2094,28 +2073,38 @@ async function resolveTorrentToPlayable(title, torrentUrl){
         return buildWebTorrentMagnet(it.info_hash);
       }
     }
-    // Tam eşleşme yoksa ilk sonucun magnet'ini kullan (başlık yeterince spesifikse).
-    if(list.length === 1 && list[0].info_hash){
-      return buildWebTorrentMagnet(list[0].info_hash);
-    }
+    if(list.length >= 1 && list[0].info_hash) return buildWebTorrentMagnet(list[0].info_hash);
   }catch(e){}
-  return torrentUrl;
+  return null;
 }
 
-// LAZY (ON-DEMAND) KAYNAK ARAMA: kullanıcı bir bölüme tıkladığında sadece O bölüm aranır.
-// Sıra: Nyaa (r.jina.ai) → AnimeTosho (direkt JSON) → RSSHub. Oynatılabilir magnet döner.
+function showMagnetFallback(magnetUri){
+  const p = document.getElementById('p2pStatus');
+  if(p){
+    p.innerHTML = `<div style="margin-bottom:8px;">Peer bulunamadı — bu torrent WebRTC&#39;yi desteklemiyor.</div><button id="copyMagnetBtn" style="background:#5865F2;color:#fff;border:0;padding:8px 16px;border-radius:6px;cursor:pointer;">Magnet&#39;i Kopyala</button>`;
+    p.style.pointerEvents = 'auto';
+    document.getElementById('copyMagnetBtn').onclick = ()=>{
+      navigator.clipboard.writeText(magnetUri).then(()=>showToast('Magnet kopyalandı — harici oynatıcıda açın')).catch(()=>{});
+    };
+  }
+}
+
+// AnimeTosho JSON API — tarayıcıdan direkt çalışır, CORS sorunu yoktur.
+// AnimeTosho, Nyaa.si'nin İngilizce altyazılı kategorisini birebir yansıtır,
+// bu nedenle aynı yayınların info_hash/magnet'ine anında erişilir.
 async function findTorrentForEpisode(anime, epNum){
   if(!anime) return null;
   const title = (anime.title.english || anime.title.romaji || anime.title.native || '').trim();
   if(!title) return null;
 
+  // Önce AnimeTosho CORS açık API (anında sonuç)
+  // Sonra Nyaa r.jina.ai yedek
+  // RSSHub son çare
   const searchWords = title.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-  const configured = getFeedSource(title);
   const feeds = [
-    { url: configured.url, label: configured.label, parser:'auto' },
-    { url: FEED_PRESETS.nyaa_en.build(title), label: FEED_PRESETS.nyaa_en.label, parser:'nyaa' },
-    { url: FEED_PRESETS.animetosho.build(title), label: FEED_PRESETS.animetosho.label, parser:'animetosho' },
-    { url: FEED_PRESETS.rsshub.build(title), label: FEED_PRESETS.rsshub.label, parser:'auto' }
+    { url: `https://feed.animetosho.xyz/json/v1/search?q=${encodeURIComponent(normalizeTitle(title).slice(0,80))}&limit=100`, label:'AnimeTosho', parser:'animetosho' },
+    { url: `https://nyaa.si/?page=rss&q=${encodeURIComponent(title)}&c=1_2&f=0`, label:'Nyaa.si (r.jina.ai)', parser:'nyaa' },
+    { url: `https://rsshub.app/nyaa/search/${encodeURIComponent(title)}`, label:'RSSHub', parser:'auto' }
   ];
   const seen = new Set();
 
@@ -2127,7 +2116,7 @@ async function findTorrentForEpisode(anime, epNum){
       let items = [];
       if(feed.parser === 'animetosho' || /animetosho/i.test(feed.url)){
         items = parseAnimeToshoJson(text);
-      } else if(feed.parser === 'nyaa' || (/nyaa\.si/i.test(feed.url) && !/^\s*<\?xml|^\s*<rss/i.test(text))){
+      } else if(feed.parser === 'nyaa'){
         items = parseNyaaJinaMarkdown(text);
       } else {
         items = parseFeedContent(text);
@@ -2139,8 +2128,9 @@ async function findTorrentForEpisode(anime, epNum){
         if(!nameMatch) continue;
         const ep = item.episode || extractEpisodeNumber(itemTitle);
         if(ep !== epNum) continue;
-        let playable = item.magnet || item.torrentUrl;
-        if(!item.magnet && item.torrentUrl){
+        // AnimeTosho doğrudan magnet döner; Nyaa için .torrent URL → AnimeTosho resolve
+        let playable = item.magnet;
+        if(!playable && item.torrentUrl){
           playable = await resolveTorrentToPlayable(itemTitle, item.torrentUrl);
         }
         if(playable) return playable;
@@ -2150,55 +2140,18 @@ async function findTorrentForEpisode(anime, epNum){
   return null;
 }
 
-// DEVICE-LOCAL TORRENT CACHE: bulunan torrentler Supabase'e YAZILMAZ — kullanıcının
-// veritabanını boş yere doldurmamak için yalnızca bu cihazda tutulur.
-const TORRENT_CACHE_KEY = 'anivax_torrent_cache_v1';
-function getCachedTorrent(animeId, ep){
-  try{ return JSON.parse(localStorage.getItem(TORRENT_CACHE_KEY)||'{}')[animeId+':'+ep] || null; }catch(e){ return null; }
-}
-function cacheTorrent(animeId, ep, url){
-  try{
-    const c = JSON.parse(localStorage.getItem(TORRENT_CACHE_KEY)||'{}');
-    c[animeId+':'+ep] = url;
-    localStorage.setItem(TORRENT_CACHE_KEY, JSON.stringify(c));
-  }catch(e){}
-}
-// Yükleme sonrası cache'teki kaynakları bellekteki kütüphaneye ekler (Supabase'e dokunmaz).
-function mergeTorrentCache(){
-  let cache = {};
-  try{ cache = JSON.parse(localStorage.getItem(TORRENT_CACHE_KEY)||'{}'); }catch(e){}
-  state.library.forEach(m => {
-    Object.keys(cache).forEach(k => {
-      const [aid, epStr] = k.split(':');
-      if(parseInt(aid) !== m.id) return;
-      const ep = parseInt(epStr);
-      const url = cache[k];
-      if(!m.episodeSources) m.episodeSources = {};
-      const es = m.episodeSources[ep] = m.episodeSources[ep] || { video:'', subtitle:null, torrents:[] };
-      if(!Array.isArray(es.torrents)) es.torrents = [];
-      if(!es.torrents.includes(url)) es.torrents.push(url);
-    });
-  });
-}
-
 // Bölüm açıldığında kaynak yoksa arka planda o bölümü feed'den çekip oynatır.
 async function lazyFetchEpisodeSource(episodeNum){
   if(!currentDetail) return false;
   const anime = currentDetail;
-  const cacheKey = anime.id + ':' + episodeNum;
-
-  let url = getCachedTorrent(anime.id, episodeNum);
-  if(!url) url = await findTorrentForEpisode(anime, episodeNum);
+  const url = await findTorrentForEpisode(anime, episodeNum);
   if(!url) return false;
-  // Kullanıcı bu sırada başka bölüme geçtiyse kaydetme
   if(currentEpisodeNum !== episodeNum) return false;
-
   if(!anime.episodeSources) anime.episodeSources = {};
   const es = anime.episodeSources[episodeNum] = anime.episodeSources[episodeNum] || { video:'', subtitle:null, torrents:[] };
   if(!Array.isArray(es.torrents)) es.torrents = [];
   if(!es.torrents.includes(url)) es.torrents.push(url);
   if(!anime.episodes || episodeNum > anime.episodes) anime.episodes = episodeNum;
-  cacheTorrent(anime.id, episodeNum, url);
   return true;
 }
 
@@ -2300,8 +2253,6 @@ async function syncFeed() {
         if (!Array.isArray(es.torrents)) es.torrents = [];
         if (!es.torrents.includes(playable)) es.torrents.push(playable);
         if (!matchedAnime.episodes || epNum > matchedAnime.episodes) matchedAnime.episodes = epNum;
-        // CİHAZ-YEREL cache — Supabase'e YAZILMAZ (kullanıcı veritabanı boş kalır).
-        cacheTorrent(matchedAnime.id, epNum, playable);
         syncedCount++;
         const animeName = matchedAnime.title.english || matchedAnime.title.romaji;
         logHtml += `<div class="al-result" style="font-size:12px;">
@@ -3859,20 +3810,7 @@ class WebTorrentPlayer {
 
     let inputData = torrentSource;
 
-    // Rule 2: If direct .torrent URL, fetch as arrayBuffer to bypass magnet metadata lookup delay.
-    // Proxy üzerinden indirilir — tarayıcı doğrudan Nyaa.si'ye erişemez (Cloudflare/CORS).
-    if (typeof torrentSource === 'string' && /\.torrent(\?|$)/i.test(torrentSource)) {
-      this.setStatus('.torrent dosyası doğrudan indiriliyor...');
-      const buf = await fetchTorrentBuffer(torrentSource);
-      if (buf) {
-        inputData = buf;
-      } else {
-        this.setStatus('Torrent indirme uyarısı, URL deneniyor...', false);
-        inputData = torrentSource;
-      }
-    }
-
-    this.setStatus('P2P Ağına bağlanılıyor...');
+    this.setStatus('P2P ağına bağlanılıyor...');
 
     // Rule 6: Inject WebRTC Trackers
     this.client.add(inputData, { announce: WEBTORRENT_FAST_TRACKERS }, (torrent) => {
@@ -3903,6 +3841,15 @@ class WebTorrentPlayer {
 
       this.file = candidates[0];
       this.setStatus('Akış hazırlanıyor...');
+
+      // Peer zaman aşımı: 20sn içinde hiç veri gelmezse kullanıcıya bildir
+      this.peerTimer = setTimeout(() => {
+        if(this.torrent && this.torrent.downloaded === 0 && !this.isDestroyed){
+          const magnet = typeof torrentSource === 'string' && torrentSource.startsWith('magnet:') ? torrentSource : '';
+          this.setStatus('Peer bulunamadı — bu torrent WebRTC destekli seeder içermiyor. ' + (magnet ? 'Magnet\'i kopyalayıp harici oynatıcıda açın.' : ''), true);
+          if(magnet) showMagnetFallback(magnet);
+        }
+      }, 20000);
 
       if (subtitleUrl && this.videoElement) {
         const track = document.createElement('track');
@@ -3991,6 +3938,7 @@ class WebTorrentPlayer {
 
   destroy() {
     this.isDestroyed = true;
+    if (this.peerTimer) clearTimeout(this.peerTimer);
     if (this.fallbackTimer) clearTimeout(this.fallbackTimer);
     if (this.videoElement) {
       if (this.onSeekingHandler) this.videoElement.removeEventListener('seeking', this.onSeekingHandler);
@@ -4036,13 +3984,22 @@ function mountWebTorrentPlayer(frame, url, subtitleUrl){
   vid.style.background = '#000';
   frame.appendChild(vid);
 
+  const statusEl = document.createElement('div');
+  statusEl.id = 'p2pStatus';
+  statusEl.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:13px;z-index:5;text-align:center;pointer-events:none;background:rgba(0,0,0,.6);padding:12px 20px;border-radius:8px;';
+  frame.appendChild(statusEl);
+
   activeWebTorrentPlayer = new WebTorrentPlayer({
     container: frame,
     videoElement: vid,
     bufferMode: 'auto',
     onStatus: (msg, isError) => {
+      const el = document.getElementById('p2pStatus');
+      if(el) el.textContent = msg || '';
       if (isError) {
-        showPlayerPlaceholder();
+        setTimeout(() => {
+          if(!document.getElementById('mainVideoEl') || !vid.currentTime) showPlayerPlaceholder();
+        }, 4000);
       }
     }
   });
