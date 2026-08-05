@@ -643,6 +643,7 @@
   <div class="admin-tabs">
     <button class="admin-tab active" data-tab="dashboard" onclick="switchAdminTab('dashboard')" data-i18n="admin.tab.dashboard">Dashboard</button>
     <button class="admin-tab" data-tab="add" onclick="switchAdminTab('add')" data-i18n="admin.tab.add">Anime əlavə et</button>
+    <button class="admin-tab" data-tab="feed" onclick="switchAdminTab('feed')">Feed Senkron</button>
     <button class="admin-tab" data-tab="seasons" onclick="switchAdminTab('seasons')" data-i18n="admin.tab.seasons">Sezonlar</button>
     <button class="admin-tab" data-tab="categories" onclick="switchAdminTab('categories')" data-i18n="admin.tab.categories">Kateqoriyalar</button>
     <button class="admin-tab" data-tab="manage" onclick="switchAdminTab('manage')" data-i18n="admin.tab.manage">İdarəetmə</button>
@@ -667,6 +668,26 @@
       </div>
     </div>
     <div id="adminResults" style="padding:0 18px 18px; display:flex; flex-direction:column; gap:10px;"></div>
+  </div>
+
+  <!-- TAB: Feed / RSS Sync -->
+  <div id="adminTab-feed" class="admin-tab-panel hidden">
+    <div class="settings-group" style="margin-top:16px;">
+      <div class="settings-label">Otomatik Feed / RSS Senkronizasyonu</div>
+      <div class="settings-card" style="padding:16px;">
+        <div class="settings-row-sub" style="margin-bottom:12px; font-size:12.5px; color:var(--text-dim);">
+          Nyaa.si, AnimeTosho veya harici JSON/RSS torrent feed URL'sini girin. Sistem otomatik olarak .torrent bağlantılarını okuyacak ve kataloğa kaydedecektir.
+        </div>
+        <div style="margin-bottom:12px;">
+          <input type="text" id="feedSourceUrlInput" placeholder="https://nyaa.si/?page=rss veya https://animetosho.org/api/v1/show..." class="auth-input" style="width:100%;">
+        </div>
+        <div style="display:flex; gap:10px;">
+          <button class="btn-primary" style="flex:1; padding:12px;" onclick="syncFeed()">Akışı Senkronize Et (Sync Feed)</button>
+        </div>
+        <div id="feedSyncStatus" style="margin-top:12px; font-size:12.5px; font-weight:700; display:none;"></div>
+      </div>
+    </div>
+    <div id="feedSyncLog" style="padding:0 18px 18px; display:flex; flex-direction:column; gap:8px;"></div>
   </div>
 
   <!-- TAB: Season merging -->
@@ -1764,6 +1785,143 @@ function switchAdminTab(tab){
   if(tab==='categories') renderCategoryList();
   if(tab==='manage') renderLibraryManage();
   if(tab==='system') updateSystemTab();
+}
+
+async function syncFeed() {
+  if (!requireAdmin()) return;
+  const inputEl = document.getElementById('feedSourceUrlInput');
+  const statusEl = document.getElementById('feedSyncStatus');
+  const logWrap = document.getElementById('feedSyncLog');
+  const feedUrl = inputEl ? inputEl.value.trim() : '';
+
+  if (!feedUrl) {
+    showToast('Lütfen geçerli bir Feed / RSS URL girin');
+    return;
+  }
+
+  statusEl.style.display = 'block';
+  statusEl.style.color = 'var(--accent)';
+  statusEl.textContent = 'Feed senkronize ediliyor...';
+  logWrap.innerHTML = '<div class="loading-row"><span class="spinner"></span>Veriler çekiliyor...</div>';
+
+  try {
+    let items = [];
+
+    // Try fetching directly or via proxy if CORS occurs
+    let resText = '';
+    const proxies = [
+      feedUrl,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(feedUrl)}`,
+      `https://corsproxy.io/?${encodeURIComponent(feedUrl)}`
+    ];
+
+    for (const p of proxies) {
+      try {
+        const r = await fetch(p);
+        if (r.ok) {
+          resText = await r.text();
+          break;
+        }
+      } catch (e) {}
+    }
+
+    if (!resText) {
+      throw new Error('Feed kaynağına erişilemedi.');
+    }
+
+    // Try parsing as JSON first
+    let isJson = false;
+    try {
+      const json = JSON.parse(resText);
+      isJson = true;
+      const rawList = Array.isArray(json) ? json : (json.items || json.data || [json]);
+      items = rawList.map(item => ({
+        title: item.title || item.name || 'Bilinmeyen Anime',
+        torrentUrl: item.torrent_url || item.download || item.magnet_uri || item.link || item.url,
+        episode: item.episode || item.ep || null
+      })).filter(i => i.torrentUrl);
+    } catch (e) {
+      // Not JSON, parse as RSS / XML
+      const xml = new DOMParser().parseFromString(resText, "text/xml");
+      const xmlItems = xml.querySelectorAll("item");
+      xmlItems.forEach(el => {
+        const title = el.querySelector("title")?.textContent || '';
+        const torrentUrl = el.querySelector("link")?.textContent || el.querySelector("enclosure")?.getAttribute("url") || '';
+        if (title && torrentUrl) {
+          items.push({ title, torrentUrl, episode: null });
+        }
+      });
+    }
+
+    if (items.length === 0) {
+      statusEl.style.color = 'var(--danger)';
+      statusEl.textContent = 'Feed kaynağında geçerli torrent verisi bulunamadı.';
+      logWrap.innerHTML = '<div class="empty-row">Kayıt bulunamadı</div>';
+      return;
+    }
+
+    let syncedCount = 0;
+    let logHtml = '';
+
+    for (const item of items) {
+      let epNum = item.episode;
+      if (!epNum) {
+        const epMatch = item.title.match(/(?:E|Ep|Bölüm|#|\s)(\d{1,4})(?:\s|\[|\(|\.|$)/i);
+        epNum = epMatch ? parseInt(epMatch[1]) : 1;
+      }
+
+      const cleanTitle = item.title.replace(/\[.*?\]|\(.*?\)/g, '').trim().toLowerCase();
+      let matchedAnime = state.library.find(m => {
+        const t1 = (m.title.english || '').toLowerCase();
+        const t2 = (m.title.romaji || '').toLowerCase();
+        return (t1 && cleanTitle.includes(t1)) || (t2 && cleanTitle.includes(t2)) || (t1 && t1.includes(cleanTitle.slice(0, 10)));
+      });
+
+      if (!matchedAnime) {
+        try {
+          const searchWord = cleanTitle.split(/[-_]/)[0].trim().slice(0, 25);
+          if (searchWord.length >= 3) {
+            const aniResults = await anilistSearch(searchWord);
+            if (aniResults && aniResults.length > 0) {
+              const bestMatch = aniResults[0];
+              if (!state.library.some(x => x.id === bestMatch.id)) {
+                state.library.push(bestMatch);
+                saveLibraryEntry(bestMatch);
+              }
+              matchedAnime = state.library.find(x => x.id === bestMatch.id);
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (matchedAnime) {
+        if (!matchedAnime.episodeSources) matchedAnime.episodeSources = {};
+        matchedAnime.episodeSources[epNum] = { video: item.torrentUrl, subtitle: null };
+        syncedCount++;
+        const animeName = matchedAnime.title.english || matchedAnime.title.romaji;
+        logHtml += `<div class="al-result" style="font-size:12px;">
+          <div class="al-info">
+            <div class="al-title">${animeName} — Bölüm ${epNum}</div>
+            <div class="al-meta" style="word-break:break-all;">${item.torrentUrl.slice(0, 60)}...</div>
+          </div>
+          <span style="color:var(--success); font-weight:800;">OK</span>
+        </div>`;
+      }
+    }
+
+    saveLibrary();
+    renderHome();
+
+    statusEl.style.color = 'var(--success)';
+    statusEl.textContent = `Senkronizasyon Tamamlandı: ${syncedCount} içerik/bölüm eklendi.`;
+    logWrap.innerHTML = logHtml || '<div class="empty-row">Tüm içerikler önceden eklenmiş.</div>';
+    showToast(`${syncedCount} bölüm senkronize edildi!`);
+
+  } catch (err) {
+    statusEl.style.color = 'var(--danger)';
+    statusEl.textContent = 'Senkronizasyon Hatası: ' + err.message;
+    logWrap.innerHTML = `<div class="empty-row" style="color:var(--danger);">${err.message}</div>`;
+  }
 }
 
 // ================= CATEGORIES =================
@@ -3230,17 +3388,248 @@ function persistCurrentProgress(){
   }
 }
 
+// ================= WEBTORRENT FAST PLAYER CLASS =================
+const WEBTORRENT_FAST_TRACKERS = [
+  "wss://tracker.openwebtorrent.com",
+  "wss://tracker.files.fm:7000/announce",
+  "wss://tracker.btorrent.xyz",
+  "wss://tracker.files.fm:7073/announce",
+  "wss://tracker.openwebtorrent.com/announce",
+  "udp://tracker.opentrackr.org:1337/announce",
+  "udp://open.stealth.si:80/announce"
+];
+
+let webTorrentLibLoading = null;
+function ensureWebTorrent(){
+  if(window.WebTorrent) return Promise.resolve();
+  if(webTorrentLibLoading) return webTorrentLibLoading;
+  webTorrentLibLoading = new Promise((resolve, reject)=>{
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/webtorrent@2.1.36/webtorrent.min.js';
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return webTorrentLibLoading;
+}
+
+class WebTorrentPlayer {
+  constructor(options = {}) {
+    this.container = options.container;
+    this.videoElement = options.videoElement;
+    this.bufferMode = options.bufferMode || 'auto'; // 'auto', 'fast', 'balanced', 'stable'
+    this.client = null;
+    this.torrent = null;
+    this.file = null;
+    this.isDestroyed = false;
+    this.lookaheadSec = 60;
+    this.lookbehindSec = 30;
+    this.fallbackTimer = null;
+    this.onStatusCallback = options.onStatus || null;
+  }
+
+  getBufferTargetSec() {
+    switch (this.bufferMode) {
+      case 'fast': return 2;
+      case 'balanced': return 4;
+      case 'stable': return 6;
+      case 'auto': default: return 3;
+    }
+  }
+
+  setStatus(msg, isError = false) {
+    if (this.onStatusCallback) this.onStatusCallback(msg, isError);
+  }
+
+  async playSource(torrentSource, subtitleUrl = null) {
+    await ensureWebTorrent();
+    if (this.isDestroyed) return;
+
+    this.client = new window.WebTorrent();
+    this.client.on('error', (err) => this.setStatus('P2P Hatası: ' + err.message, true));
+
+    let inputData = torrentSource;
+
+    // Rule 2: If direct .torrent URL, fetch as arrayBuffer to bypass magnet metadata lookup delay
+    if (typeof torrentSource === 'string' && (/\.torrent(\?|$)/i.test(torrentSource) || torrentSource.startsWith('http'))) {
+      if (/\.torrent(\?|$)/i.test(torrentSource)) {
+        this.setStatus('.torrent dosyası doğrudan indiriliyor...');
+        try {
+          const res = await fetch(torrentSource);
+          if (!res.ok) throw new Error('Torrent dosyası indirilemedi HTTP ' + res.status);
+          inputData = await res.arrayBuffer();
+        } catch (err) {
+          this.setStatus('Torrent indirme uyarısı, URL deneniyor...', false);
+          inputData = torrentSource;
+        }
+      }
+    }
+
+    this.setStatus('P2P Ağına bağlanılıyor...');
+
+    // Rule 6: Inject WebRTC Trackers
+    this.client.add(inputData, { announce: WEBTORRENT_FAST_TRACKERS }, (torrent) => {
+      if (this.isDestroyed) return;
+      this.torrent = torrent;
+
+      // Rule 7: Codec / Format precedence filtering (mp4/x264 preferred, then mkv, webm)
+      const videoExts = /\.(mp4|mkv|webm|avi|mov)$/i;
+      const candidates = torrent.files.filter(f => videoExts.test(f.name));
+      if (candidates.length === 0) {
+        this.setStatus('Hata: Torrent içerisinde desteklenen video dosyası bulunamadı.', true);
+        return;
+      }
+
+      // Prioritize mp4 / x264, or largest video file
+      candidates.sort((a, b) => {
+        const aMp4 = /\.mp4$/i.test(a.name) ? 2 : 1;
+        const bMp4 = /\.mp4$/i.test(b.name) ? 2 : 1;
+        if (aMp4 !== bMp4) return bMp4 - aMp4;
+        return b.length - a.length;
+      });
+
+      this.file = candidates[0];
+      this.setStatus('Akış hazırlanıyor...');
+
+      if (subtitleUrl && this.videoElement) {
+        const track = document.createElement('track');
+        track.kind = 'subtitles';
+        track.src = subtitleUrl;
+        track.default = true;
+        track.label = 'Altyazı';
+        this.videoElement.appendChild(track);
+      }
+
+      this.file.renderTo(this.videoElement, { autoplay: false, controls: false }, (err) => {
+        if (err && !this.isDestroyed) this.setStatus('Oynatma hatası: ' + err.message, true);
+      });
+
+      // Rule 3: Dynamic Adaptive Buffer & torrent.critical()
+      this.focusDownloadWindow(0);
+
+      // Fallback: Expand target buffer to 5s if peer speeds are slow
+      let targetBuffer = this.getBufferTargetSec();
+      this.fallbackTimer = setTimeout(() => {
+        if (this.videoElement && this.videoElement.paused && this.videoElement.currentTime === 0) {
+          targetBuffer = Math.min(targetBuffer + 2, 6);
+          this.focusDownloadWindow(0, targetBuffer);
+        }
+      }, 3500);
+
+      this.setupVideoEvents();
+    });
+  }
+
+  // Rule 4 & Rule 5: Smart Seek & Chunk Abort + RAW Store Sliding Window [-30s, +60s]
+  focusDownloadWindow(currentTimeSec, overrideBufferSec) {
+    if (!this.torrent || !this.file || !this.videoElement) return;
+
+    const fileOffsetPieces = Math.floor(this.file.offset / this.torrent.pieceLength);
+    const filePieceCount = Math.ceil(this.file.length / this.torrent.pieceLength);
+    const totalDurationSec = this.videoElement.duration || 1200;
+
+    const secondsPerPiece = totalDurationSec / filePieceCount;
+    const currentPieceIndex = fileOffsetPieces + Math.floor(currentTimeSec / secondsPerPiece);
+
+    const targetSec = overrideBufferSec || this.getBufferTargetSec();
+    const criticalPieces = Math.max(2, Math.ceil(targetSec / secondsPerPiece));
+
+    const lookbehindPieces = Math.ceil(this.lookbehindSec / secondsPerPiece);
+    const lookaheadPieces = Math.ceil(this.lookaheadSec / secondsPerPiece);
+
+    // Calculate Sliding Window [-30s, +60s]
+    const windowStart = Math.max(fileOffsetPieces, currentPieceIndex - lookbehindPieces);
+    const windowEnd = Math.min(fileOffsetPieces + filePieceCount - 1, currentPieceIndex + lookaheadPieces);
+
+    // Smart Abort: Deselect everything outside window or previous unneeded chunks
+    this.torrent.deselect(fileOffsetPieces, fileOffsetPieces + filePieceCount - 1, false);
+    
+    // Select only sliding window
+    this.torrent.select(windowStart, windowEnd, true);
+
+    // Set immediate critical priority for buffer target
+    const criticalEnd = Math.min(windowEnd, currentPieceIndex + criticalPieces);
+    this.torrent.critical(currentPieceIndex, criticalEnd);
+  }
+
+  setupVideoEvents() {
+    if (!this.videoElement) return;
+
+    this.onSeekingHandler = () => {
+      this.focusDownloadWindow(this.videoElement.currentTime);
+    };
+
+    this.onCanPlayHandler = () => {
+      if (this.videoElement.paused && this.videoElement.currentTime === 0) {
+        this.setStatus('');
+        this.videoElement.play().catch(() => {});
+      }
+    };
+
+    this.videoElement.addEventListener('seeking', this.onSeekingHandler);
+    this.videoElement.addEventListener('canplay', this.onCanPlayHandler);
+  }
+
+  destroy() {
+    this.isDestroyed = true;
+    if (this.fallbackTimer) clearTimeout(this.fallbackTimer);
+    if (this.videoElement) {
+      if (this.onSeekingHandler) this.videoElement.removeEventListener('seeking', this.onSeekingHandler);
+      if (this.onCanPlayHandler) this.videoElement.removeEventListener('canplay', this.onCanPlayHandler);
+    }
+    if (this.client) {
+      try { this.client.destroy(); } catch (e) {}
+      this.client = null;
+    }
+    this.torrent = null;
+    this.file = null;
+  }
+}
+
 // ================= VIDEO PLAYER ENGINE =================
-// Detects the source type (YouTube / HLS .m3u8 / direct file) and mounts the
-// right player. Falls back to the "no source" placeholder when nothing is set.
+// Detects the source type (YouTube / HLS .m3u8 / direct file / WebTorrent P2P)
+// and mounts the right player. Falls back to the "no source" placeholder when
+// nothing is set.
 function detectSourceType(url){
   if(!url) return null;
   const yt = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{6,})/);
   if(yt) return { type:'youtube', id: yt[1] };
   if(/\.m3u8(\?|$)/i.test(url)) return { type:'hls', url };
+  // Rule 2: Direct .torrent URLs & magnet links flow through the WebTorrent engine
+  if(/\.torrent(\?|$)/i.test(url) || /^magnet:/.test(url)) return { type:'webtorrent', url };
   if(/\.(mp4|webm|ogg)(\?|$)/i.test(url)) return { type:'direct', url };
   // Unknown extension (e.g. some scraping-derived link) — try as a direct file source.
   return { type:'direct', url };
+}
+
+let activeWebTorrentPlayer = null;
+
+function mountWebTorrentPlayer(frame, url, subtitleUrl){
+  removeVideoElements();
+  const vid = document.createElement('video');
+  vid.id = 'mainVideoEl';
+  vid.controls = false;
+  vid.autoplay = false;
+  vid.playsInline = true;
+  vid.preload = 'auto';
+  vid.style.width = '100%';
+  vid.style.height = '100%';
+  vid.style.background = '#000';
+  frame.appendChild(vid);
+
+  activeWebTorrentPlayer = new WebTorrentPlayer({
+    container: frame,
+    videoElement: vid,
+    bufferMode: 'auto',
+    onStatus: (msg, isError) => {
+      if (isError) {
+        showPlayerPlaceholder();
+      }
+    }
+  });
+
+  activeWebTorrentPlayer.playSource(url, subtitleUrl);
+  attachPlayerBehaviors(vid, frame);
 }
 
 function loadEpisodeIntoPlayer(episodeNum){
@@ -3259,6 +3648,8 @@ function loadEpisodeIntoPlayer(episodeNum){
     mountYouTubePlayer(frame, info.id);
   } else if(info.type === 'hls'){
     mountHlsPlayer(frame, info.url, src.subtitle);
+  } else if(info.type === 'webtorrent'){
+    mountWebTorrentPlayer(frame, info.url, src.subtitle);
   } else {
     mountDirectPlayer(frame, info.url, src.subtitle);
   }
@@ -3313,6 +3704,10 @@ function removeVideoElements(){
 function teardownPlayer(){
   persistCurrentProgress();
   stopProgressTracking();
+  if(activeWebTorrentPlayer){
+    try{ activeWebTorrentPlayer.destroy(); }catch(e){}
+    activeWebTorrentPlayer = null;
+  }
   removeVideoElements();
   const panel = document.getElementById('playerSettingsPanel');
   if(panel) panel.classList.add('hidden');
