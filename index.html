@@ -2144,8 +2144,57 @@ async function lazyFetchEpisodeSource(episodeNum){
 // olduğu için media istekleri Cloudflare Worker (/proxy) üzerinden geçer.
 const MEGAVID_WORKER_BASE = 'https://anivax-proxy.wyzexsensei.workers.dev';
 
+// Anineko kaynağı: otakuvid embed'leri üzerinden CORS'u açık (acek-cdn.com)
+// m3u8 + cdn.anizara.store .vtt softsub döndürür. Tarayıcı segmentleri
+// doğrudan CDN'den çeker — worker'a bölüm başına sadece 1-2 istek gider.
+// Megavid'de ~325 istek/bölüm olduğundan Anineko tercih edilir.
+const ANINEKO_SOURCE_PATH = '/anineko-source';
+
 let currentMegavidUrl = null;      // resolved m3u8 for the active episode
 let megavidSubtitleUrl = null;     // .vtt track routed through the worker
+
+// AniList başlıklarını (en→tr→romaji sırası) kullanarak Anineko'dan m3u8 +
+// softsub listesi alır. Tek istek: worker aramayı ve embed çözmeyi kendisi yapar.
+async function aninekoResolveSource(anime, episodeNum){
+  const titles = [];
+  if(anime.title && anime.title.english) titles.push(anime.title.english);
+  if(anime.title && anime.title.romaji) titles.push(anime.title.romaji);
+  if(anime.title && anime.title.native) titles.push(anime.title.native);
+  for(const t of titles){
+    if(!t) continue;
+    try{
+      const res = await fetch(`${MEGAVID_WORKER_BASE}${ANINEKO_SOURCE_PATH}?title=${encodeURIComponent(t)}&ep=${episodeNum}`);
+      const data = await res.json().catch(()=>null);
+      if(res.ok && data && data.status === 'ok' && data.source) return data;
+    }catch(e){ /* try next title */ }
+  }
+  return null;
+}
+
+// Anineko m3u8'i doğrudan oynatılabilir (CORS açık): worker /proxy'ye gerek yok.
+// Sadece vtt'yi track olarak ekleriz.
+async function loadAninekoSourceIfNeeded(frame, anime, episodeNum){
+  const data = await aninekoResolveSource(anime, episodeNum);
+  if(!data) return false;
+  if(currentEpisodeNum !== episodeNum) return false;
+
+  const playUrl = data.source;
+  const subTrack = Array.isArray(data.tracks) && data.tracks[0] ? data.tracks[0].file : null;
+
+  if(playUrl){
+    removeVideoElements();
+    if(window.Hls || vidCanNativeHls()){
+      await mountHlsPlayer(frame, playUrl, subTrack);
+    } else {
+      await ensureHlsJs();
+      if(window.Hls) await mountHlsPlayer(frame, playUrl, subTrack);
+      else return false;
+    }
+    showPlayerToast('Anineko • ' + (data.meta && data.meta.slug ? data.meta.slug : 'otakuvid'));
+    return true;
+  }
+  return false;
+}
 
 // AniList id + idMal kullanarak Megavid'den m3u8 + softsub listesi alır.
 async function megavidResolveSource(anime, episodeNum){
@@ -4123,13 +4172,18 @@ function loadEpisodeIntoPlayer(episodeNum){
 
   const hasVideo = !!(src && src.video);
 
-  // KAYNAK YOK: Megavid JSON API üzerinden otomatik m3u8 + softsub çözülür.
-  // Bu ana akıştır; başarısız olursa iframe yedeği kullanılır.
+  // KAYNAK YOK: Önce Anineko (1-2 istek/bölüm, CORS açık), sonra Megavid
+  // (~325 istek/bölüm, proxy gerekli) otomatik çözülür. İkisi de olmazsa
+  // iframe yedeği kullanılır.
   if(!src || !hasVideo){
     showPlayerLoading(state.lang==='en' ? 'Searching for episode source...' : (state.lang==='tr' ? 'Bölüm kaynağı aranıyor...' : 'Bölüm üçün mənbə axtarılır...'));
-    loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
-      if(!didPlay && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl') && !document.getElementById('megavidIframe')){
-        mountMegavidIframe(frame, currentDetail, episodeNum);
+    loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
+      if(!didPlay && currentEpisodeNum === episodeNum){
+        loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
+          if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl') && !document.getElementById('megavidIframe')){
+            mountMegavidIframe(frame, currentDetail, episodeNum);
+          }
+        });
       }
     });
     return;
