@@ -782,6 +782,13 @@
         </div>
         <div class="settings-row">
           <div>
+            <div class="settings-row-label">Otakuvid Direkt Mod</div>
+            <div class="settings-row-sub">Segment'leri doğrudan CDN'den çek (0 worker isteği). Bozulursa otomatik proxy moda düşer.</div>
+          </div>
+          <button class="btn-ghost" id="directOtakuBtn" onclick="toggleDirectOtaku()">Kapalı</button>
+        </div>
+        <div class="settings-row">
+          <div>
             <div class="settings-row-label" data-i18n="admin.system.libCount">Kitabxanada</div>
             <div class="settings-row-sub" id="adminLibCount">0 anime</div>
           </div>
@@ -1129,6 +1136,7 @@ let state = {
   episodeProgress: {},  // { "animeId:episode": true }
   feedConfig: null,     // { provider:'nyaa-en', url:'...' } — admin feed kaynağı
   sourcePref: 'auto'    // 'auto' | 'anineko' | 'megavid' — bölüm kaynak önceliği
+  ,directOtaku: false   // Otakuvid Direkt Mod: segment'ler doğrudan CDN'den (0 worker isteği)
 };
 
 // ================= ADMIN AUTH =================
@@ -1423,7 +1431,8 @@ function saveSettings(){
   // Personal prefs only — device-local, not shared across users.
   try{ localStorage.setItem('anivax_settings', JSON.stringify({
     lang: state.lang, theme: state.theme, autoplay: state.autoplay, skipIntro: state.skipIntro,
-    feedConfig: state.feedConfig || null, sourcePref: state.sourcePref || 'auto'
+    feedConfig: state.feedConfig || null, sourcePref: state.sourcePref || 'auto',
+    directOtaku: state.directOtaku || false
   })); }catch(e){}
 }
 
@@ -2229,8 +2238,20 @@ async function megavidResolveSource(anime, episodeNum){
 
 // m3u8 ve .vtt dosyalarını Worker /proxy üzerinden geçirerek oynatılabilir
 // URL'ler üretir (CORS + Referer işini Worker halleder).
+function isOtakuvidHlsUrl(u){
+  try { return /\/hls3?\//i.test(new URL(u).pathname); } catch { return false; }
+}
+
 function megavidProxyUrl(rawUrl, referer){
   if(!rawUrl) return '';
+  // Otakuvid Direkt Mod: master/child/segment isteklerini worker'a hiç sürmeyip
+  // tarayıcının doğrudan otakuvid CDN'inden çekmesini sağlar. CDN, gelen
+  // Origin'e CORS yansıtıyor ve Referer değeri kontrol etmiyor (varlığı yeterli)
+  // → 1 izleyici ≈ 1-2 worker isteği (yalnızca çözümleme + altyazı).
+  // Bu açıklık ileride kapatılırsa otomatik proxy moda düşülür (admin paneli toggle).
+  if(state.directOtaku && isOtakuvidHlsUrl(rawUrl)){
+    return rawUrl;
+  }
   return `${MEGAVID_WORKER_BASE}/proxy?url=${encodeURIComponent(rawUrl)}&referer=${encodeURIComponent(referer || 'https://megavid.buzz/')}`;
 }
 
@@ -2622,6 +2643,28 @@ function renderAdminDashboard(){
 
 function updateSystemTab(){
   document.getElementById('adminLibCount').textContent = state.library.length + ' ' + (state.lang==='en'?'anime':'anime');
+  refreshDirectOtakuBtn();
+}
+
+function refreshDirectOtakuBtn(){
+  const btn = document.getElementById('directOtakuBtn');
+  if(!btn) return;
+  btn.textContent = state.directOtaku ? 'AÇIK' : 'Kapalı';
+  btn.classList.toggle('active', !!state.directOtaku);
+  if(state.directOtaku){ btn.style.color = 'var(--accent)'; btn.style.borderColor = 'color-mix(in srgb, var(--accent) 40%, transparent)'; }
+  else { btn.style.color = ''; btn.style.borderColor = ''; }
+}
+
+function toggleDirectOtaku(){
+  state.directOtaku = !state.directOtaku;
+  saveSettings();
+  refreshDirectOtakuBtn();
+  showPlayerToast(state.directOtaku
+    ? (state.lang==='en' ? 'Otakuvid Direct mode ON — segments stream straight from CDN (0 worker requests)'
+       : (state.lang==='tr' ? 'Otakuvid Direkt mod AÇIK — segmentler CDN\'den (0 worker isteği)' : 'Otakuvid Direkt rejim AÇIQ — seqmentlər CDN-dən (0 worker sorğusu)'))
+    : (state.lang==='en' ? 'Otakuvid proxy mode restored' : (state.lang==='tr' ? 'Otakuvid proxy moda döndü' : 'Otakuvid proxy rejiminə qayıdıldı')));
+  const current = currentEpisodeNum;
+  if(current){ playEpisode(current); }
 }
 
 // ================= SEASON LINKING (base pick -> multi-select -> confirm) =================
@@ -4578,6 +4621,18 @@ function attachHlsErrorRecovery(hls, vid){
           networkRetries++;
           hls.startLoad(); // retry loading the current position
         } else {
+          // Direct mod (segmentler CDN'den) kırıldıysa — CDN CORS/referer
+          // sıkılaştırmış olabilir — otomatik olarak proxy moda düş ve yeniden yükle.
+          if(state.directOtaku && currentEpisodeNum){
+            state.directOtaku = false;
+            saveSettings();
+            refreshDirectOtakuBtn();
+            showPlayerToast((state.lang==='en' ? 'Otakuvid CDN blocked direct access — switched to proxy mode'
+              : (state.lang==='tr' ? 'Otakuvid CDN doğrudan erişimi engelledi — proxy moda geçildi'
+                 : 'Otakuvid CDN birbaşa girişi blokladı — proxy rejiminə keçildi')));
+            playEpisode(currentEpisodeNum);
+            return;
+          }
           showPlayerToast((state.lang==='en'?'Video couldn\'t load — try a different source':(state.lang==='tr'?'Video yüklenemedi — farklı bir kaynak dene':'Video yüklənə bilmədi — başqa mənbə sına')));
           showPlayerPlaceholder();
         }
