@@ -4666,7 +4666,14 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
       startLevel: -1, // let hls.js auto-pick the best starting quality for the connection
       enableWorker: true,
       lowLatencyMode: false,
-      backBufferLength: 30 // discard buffer more than 30s behind playhead, frees memory during long sessions
+      backBufferLength: 30, // discard buffer more than 30s behind playhead, frees memory during long sessions
+      // otakuvid CDNs can be slow on cold segments — generous timeouts keep a
+      // seek or a late fragment from stalling the player into an error retry.
+      fragLoadingTimeOut: 60000,
+      fragLoadingMaxRetry: 6,
+      fragLoadingRetryDelay: 500,
+      manifestLoadingTimeOut: 30000,
+      levelLoadingTimeOut: 30000
     });
 
     // Populate the quality pills from the parsed manifest's renditions.
