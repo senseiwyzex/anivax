@@ -143,17 +143,21 @@ async function handleProxy(request, url) {
     return new Response("Invalid url parameter", { status: 400, headers: corsHeaders() });
   }
   const host = targetUrl.hostname;
+  // otakuvid's masked CDN rotates random front-hosts per-embed (e.g.
+  // eTOjdo3Yv1iw.wcfpc8vpy5udbwh.cfd, WPvsAhSVL0YO.mindbodywellness.space,
+  // m5QqjwpATPzb.infrastructureportal.site ...). We can't enumerate them, so
+  // instead of trusting the host we accept streams whose path carries the
+  // otakuvid HLS signature (/hls3/ or /hls/) — playlists, segments and
+  // iframe/variant lists all live under those paths.
+  const isOtakuvidStream = /\/hls3?\//i.test(targetUrl.pathname);
   const hostAllowed =
     ALLOWED_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
-    // otakuvid's masked CDN front (e.g. eTOjdo3Yv1iw.wcfpc8vpy5udbwh.cfd) uses
-    // random .cfd subdomains that rotate per-embed; accept them so the hls3
-    // playlist + segments stream through us.
-    (host.endsWith(".cfd") && targetUrl.pathname.includes("/hls"));
+    isOtakuvidStream;
   if (!hostAllowed) {
     return new Response("Host not allowed", { status: 403, headers: corsHeaders() });
   }
 
-  const isPlaylist = targetUrl.pathname.endsWith(".m3u8") || targetUrl.pathname.endsWith(".txt");
+  const isPlaylistByPath = targetUrl.pathname.endsWith(".m3u8") || targetUrl.pathname.endsWith(".txt");
   const isSub = targetUrl.pathname.endsWith(".vtt");
 
   // Megavid's CDN front-pads every TS segment with a fake 1x1 PNG header
@@ -187,7 +191,7 @@ async function handleProxy(request, url) {
     const res = await edgeFetch(targetUrl.href, {
       referer: referer,
       origin: MEGAVID_BASE,
-      accept: isPlaylist
+      accept: isPlaylistByPath
         ? "application/vnd.apple.mpegurl, application/x-mpegURL, */*"
         : "*/*",
     });
@@ -202,6 +206,17 @@ async function handleProxy(request, url) {
     const contentType = res.headers.get("Content-Type") || "application/octet-stream";
     const base = new URL(request.url);
 
+    // Detect playlists by content when the CDN masks the extension
+    // (master.txt, .urlse, random suffixes). If it looks like an m3u8, treat it
+    // as one regardless of path/extension.
+    let isPlaylist = isPlaylistByPath;
+    let playlistText = null;
+    if (!isPlaylist && /text|mpegurl|playlist/i.test(contentType)) {
+      const probe = await res.clone().text();
+      isPlaylist = probe.trim().startsWith("#EXTM3U");
+      if (isPlaylist) playlistText = probe;
+    }
+
     if (isPlaylist) {
       // Rewrite playlist lines: absolute/relative segment + key URIs become
       // /proxy?url=<encoded>&referer=<encoded>. Also rewrite URI="..." inside
@@ -209,7 +224,7 @@ async function handleProxy(request, url) {
       // through the proxy too.
       const proxify = (u) =>
         base.origin + "/proxy?url=" + encodeURIComponent(u) + "&referer=" + encodeURIComponent(referer);
-      const text = await res.text();
+      const text = playlistText !== null ? playlistText : await res.text();
       const rewritten = text
         .split("\n")
         .map((line) => {

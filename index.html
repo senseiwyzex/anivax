@@ -4571,12 +4571,14 @@ function attachHlsErrorRecovery(hls, vid){
   let networkRetries = 0;
   hls.on(Hls.Events.ERROR, (event, data)=>{
     if(!data.fatal) return; // non-fatal errors are normal and self-heal
+    console.warn('[anivax] HLS fatal error:', data.type, data.details, data.frag && data.frag.url);
     switch(data.type){
       case Hls.ErrorTypes.NETWORK_ERROR:
         if(networkRetries < 3){
           networkRetries++;
           hls.startLoad(); // retry loading the current position
         } else {
+          showPlayerToast((state.lang==='en'?'Video couldn\'t load — try a different source':(state.lang==='tr'?'Video yüklenemedi — farklı bir kaynak dene':'Video yüklənə bilmədi — başqa mənbə sına')));
           showPlayerPlaceholder();
         }
         break;
@@ -4584,6 +4586,7 @@ function attachHlsErrorRecovery(hls, vid){
         hls.recoverMediaError(); // built-in hls.js recovery for decode errors
         break;
       default:
+        showPlayerToast((state.lang==='en'?'Playback error — try a different source':(state.lang==='tr'?'Oynatma hatası — farklı bir kaynak dene':'Oxutma xətası — başqa mənbə sına')));
         showPlayerPlaceholder();
         break;
     }
@@ -4654,6 +4657,10 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
       if(currentHlsLevels.length){
         buildPlayerSettingsPanel(null);
       }
+      // Kick off playback as soon as the manifest is usable — relying only on
+      // `canplay` can stall on some hls.js versions when the first fragment is
+      // slow, leaving a mounted player that never starts.
+      vid.play().catch(()=>{});
     });
 
     hlsInstance.loadSource(url);
@@ -4663,6 +4670,7 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
     attachPlayerBehaviors(vid, frame);
     buildPlayerSettingsPanel(null);
   }catch(e){
+    console.error('[anivax] mountHlsPlayer failed:', e);
     showPlayerPlaceholder();
     return;
   }
