@@ -129,18 +129,31 @@ async function handleProxy(request, url) {
   if (!target) {
     return new Response("Missing url parameter", { status: 400, headers: corsHeaders() });
   }
-  // Only ever fetch from the Megavid ecosystem to avoid becoming an open proxy.
+  // Only ever fetch from the known video CDNs to avoid becoming an open proxy.
+  const ALLOWED_HOSTS = [
+    "megavid.buzz",
+    "acek-cdn.com",
+    "dramiyos-cdn.com",
+    "anizara.store",
+  ];
   let targetUrl;
   try {
     targetUrl = new URL(target);
   } catch {
     return new Response("Invalid url parameter", { status: 400, headers: corsHeaders() });
   }
-  if (!targetUrl.hostname.endsWith("megavid.buzz") && targetUrl.hostname !== "megavid.buzz") {
+  const host = targetUrl.hostname;
+  const hostAllowed =
+    ALLOWED_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
+    // otakuvid's masked CDN front (e.g. eTOjdo3Yv1iw.wcfpc8vpy5udbwh.cfd) uses
+    // random .cfd subdomains that rotate per-embed; accept them so the hls3
+    // playlist + segments stream through us.
+    (host.endsWith(".cfd") && targetUrl.pathname.includes("/hls"));
+  if (!hostAllowed) {
     return new Response("Host not allowed", { status: 403, headers: corsHeaders() });
   }
 
-  const isPlaylist = targetUrl.pathname.endsWith(".m3u8");
+  const isPlaylist = targetUrl.pathname.endsWith(".m3u8") || targetUrl.pathname.endsWith(".txt");
   const isSub = targetUrl.pathname.endsWith(".vtt");
 
   // Megavid's CDN front-pads every TS segment with a fake 1x1 PNG header
@@ -280,8 +293,9 @@ function unpackPacker(packed) {
   for (let i = count - 1; i >= 0; i--) {
     out = out.replace(new RegExp("\\b" + i.toString(base) + "\\b", "g"), k[i] || i.toString(base));
   }
-  // Rejoin `.split('-'...)` string mashing: "foo.dramiyos'.split('-cdn.com" -> "foo.dramiyos-cdn.com"
-  out = out.replace(/([A-Za-z0-9.]+)'\.split\('-([A-Za-z0-9./?=&:]+)/g, "$1-$2");
+  // Rejoin `.split('-'...)` string mashing: "foo.dramiyos'.split('-cdn.com" -> "foo.dramiyos-cdn.com",
+  // and ".cfd"-style mash: "host'.split('.cfd/path" -> "host.cfd/path".
+  out = out.replace(/([A-Za-z0-9.]+)'\.split\('([A-Za-z0-9./?=&:-]+)/g, "$1$2");
   return out;
 }
 
@@ -352,10 +366,13 @@ async function handleAninekoSource(request, url) {
       const decoded = unpackPacker(packed);
       if (decoded) {
         // hls2/hls3/hls4 links appear as "hlsN":"<url>" inside the config.
-        const linkMatch = [...decoded.matchAll(/"hls[0-9]":"([^"]*m3u8[^"]*)"/g)].map((m2) => m2[1]);
-        m3u8 = linkMatch.find((l) => l.includes("acek-cdn.com") || l.includes("-cdn.com")) ||
-               linkMatch[0] ||
-               null;
+        // hls3 lives on the masked ".cfd" host (playlist = master.txt) and is the
+        // one that serves directly; dramiyos-cdn.com requires a locked token.
+        const linkMatch = [...decoded.matchAll(/"hls[0-9]":"([^"]+)"/g)].map((m2) => m2[1]);
+        const cfd = linkMatch.find((l) => l.includes(".cfd")) ||
+                    linkMatch.find((l) => l.includes("wcfpc8") || l.includes("master.txt"));
+        const cdn = linkMatch.find((l) => l.includes("acek-cdn.com") || l.includes("-cdn.com"));
+        m3u8 = cfd || cdn || linkMatch[0] || null;
       }
     }
     if (!m3u8) {

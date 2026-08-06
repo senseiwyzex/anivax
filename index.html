@@ -1127,7 +1127,8 @@ let state = {
   userRatings: {},   // { animeId: 1-10 }
   communityRatings: {}, // { animeId: {avg, count} } — aggregated from all users
   episodeProgress: {},  // { "animeId:episode": true }
-  feedConfig: null      // { provider:'nyaa-en', url:'...' } — admin feed kaynağı
+  feedConfig: null,     // { provider:'nyaa-en', url:'...' } — admin feed kaynağı
+  sourcePref: 'auto'    // 'auto' | 'anineko' | 'megavid' — bölüm kaynak önceliği
 };
 
 // ================= ADMIN AUTH =================
@@ -1422,7 +1423,7 @@ function saveSettings(){
   // Personal prefs only — device-local, not shared across users.
   try{ localStorage.setItem('anivax_settings', JSON.stringify({
     lang: state.lang, theme: state.theme, autoplay: state.autoplay, skipIntro: state.skipIntro,
-    feedConfig: state.feedConfig || null
+    feedConfig: state.feedConfig || null, sourcePref: state.sourcePref || 'auto'
   })); }catch(e){}
 }
 
@@ -2175,15 +2176,20 @@ async function aninekoResolveSource(anime, episodeNum){
   return null;
 }
 
-// Anineko m3u8'i doğrudan oynatılabilir (CORS açık): worker /proxy'ye gerek yok.
-// Sadece vtt'yi track olarak ekleriz.
+// Anineko/otakuvid akışı: m3u8 ve segmentleri worker /proxy'den geçiririz çünkü
+// dramiyos/.cfd CDN'i token'ı IP'ye kilitler ve CORS'u sadece otakuvid.online'a
+// açar. Worker bu yüzden hem playlist'i rewrite eder hem de segmentleri çeker.
 async function loadAninekoSourceIfNeeded(frame, anime, episodeNum){
   const data = await aninekoResolveSource(anime, episodeNum);
   if(!data) return false;
   if(currentEpisodeNum !== episodeNum) return false;
 
-  const playUrl = data.source;
-  const subTracks = Array.isArray(data.tracks) ? data.tracks : [];
+  const referer = 'https://otakuvid.online/';
+  const playUrl = megavidProxyUrl(data.source, referer);
+  const subTracks = (Array.isArray(data.tracks) ? data.tracks : []).map(t => ({
+    file: megavidProxyUrl(t.file, referer),
+    label: t.label || 'English'
+  }));
 
   if(playUrl){
     removeVideoElements();
@@ -4181,20 +4187,34 @@ function loadEpisodeIntoPlayer(episodeNum){
 
   const hasVideo = !!(src && src.video);
 
-  // KAYNAK YOK: Önce Anineko (1-2 istek/bölüm, CORS açık), sonra Megavid
-  // (~325 istek/bölüm, proxy gerekli) otomatik çözülür. İkisi de olmazsa
-  // iframe yedeği kullanılır.
+  // KAYNAK YOK: Varsayılan olarak Anineko (1-2 istek/bölüm, CORS açık), sonra
+  // Megavid (~325 istek/bölüm, proxy gerekli) otomatik çözülür. Kullanıcı
+  // settings panelinden sourcePref ile sırayı Otakuvid/Megavid lehine
+  // zorlayabilir. İkisi de olmazsa iframe yedeği kullanılır.
   if(!src || !hasVideo){
     showPlayerLoading(state.lang==='en' ? 'Searching for episode source...' : (state.lang==='tr' ? 'Bölüm kaynağı aranıyor...' : 'Bölüm üçün mənbə axtarılır...'));
-    loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
-      if(!didPlay && currentEpisodeNum === episodeNum){
-        loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
-          if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl') && !document.getElementById('megavidIframe')){
-            mountMegavidIframe(frame, currentDetail, episodeNum);
-          }
-        });
-      }
-    });
+    const pref = state.sourcePref || 'auto';
+    if(pref === 'megavid'){
+      loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
+        if(!didPlay && currentEpisodeNum === episodeNum){
+          loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum).then(didAnineko => {
+            if(!didAnineko && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl') && !document.getElementById('megavidIframe')){
+              mountMegavidIframe(frame, currentDetail, episodeNum);
+            }
+          });
+        }
+      });
+    } else {
+      loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
+        if(!didPlay && currentEpisodeNum === episodeNum){
+          loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
+            if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl') && !document.getElementById('megavidIframe')){
+              mountMegavidIframe(frame, currentDetail, episodeNum);
+            }
+          });
+        }
+      });
+    }
     return;
   }
 
@@ -4705,7 +4725,8 @@ function renderPlayerEpisodeList(){
 }
 
 function buildPlayerSettingsPanel(src){
-  // SOURCE: admin manuel video linki varsa gösterilir; Megavid otomatik akıştır.
+  // SOURCE: admin manuel video linki varsa gösterilir; yoksa otomatik akış için
+  // Otakuvid/Megavid öncelik seçimi (sourcePref) gösterilir.
   const srcWrap = document.getElementById('sourceOptions');
   const srcRow = document.getElementById('sourceRow');
   const hasVideo = !!(src && src.video);
@@ -4714,7 +4735,16 @@ function buildPlayerSettingsPanel(src){
     const active = src.video === currentEpisodeSourceUrl;
     srcWrap.innerHTML = `<button class="option-pill ${active?'active':''}" onclick="switchEpisodeSource('${src.video.replace(/'/g,"\\'")}')">${state.lang==='en'?'Video link':'Video link'}</button>`;
   } else {
-    srcRow.classList.add('hidden');
+    srcRow.classList.remove('hidden');
+    const pref = state.sourcePref || 'auto';
+    const opts = [
+      { v:'auto',    label: state.lang==='en'?'Auto':(state.lang==='tr'?'Otomatik':'Avtomatik') },
+      { v:'anineko', label:'Otakuvid' },
+      { v:'megavid', label:'Megavid' }
+    ];
+    srcWrap.innerHTML = opts.map(o=>`
+      <button class="option-pill ${pref===o.v?'active':''}" onclick="setSourcePref('${o.v}')">${o.label}</button>
+    `).join('');
   }
 
   // Quality: HLS.js manifest'inden gelen seviyeler önceliklidir (otakuvid/megavid),
@@ -4732,7 +4762,7 @@ function buildPlayerSettingsPanel(src){
     });
     qWrap.innerHTML = `<button class="option-pill ${hlsInstance.currentLevel === -1 ? 'active':''}" onclick="switchHlsQuality(-1)">${state.lang==='en'?'Auto':(state.lang==='tr'?'Otomatik':'Avtomatik')}</button>` +
       labels.map(({name,i})=>`<button class="option-pill ${hlsInstance.currentLevel === i ? 'active':''}" onclick="switchHlsQuality(${i})">${name}</button>`).join('');
-  } else if(src.qualities && Object.keys(src.qualities).length > 0){
+  } else if(src && src.qualities && Object.keys(src.qualities).length > 0){
     qRow.classList.remove('hidden');
     const currentUrl = document.getElementById('mainVideoEl') ? document.getElementById('mainVideoEl').src : src.video;
     qWrap.innerHTML = Object.entries(src.qualities).map(([label, url])=>`
@@ -4839,6 +4869,16 @@ function setPlaybackSpeed(speed, btn){
   if(vid) vid.playbackRate = speed;
   document.querySelectorAll('#speedOptions .option-pill').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
+}
+
+// Otakuvid/Megavid önceliğini değiştirir, kaydeder ve mevcut bölümü yeniden yükler.
+function setSourcePref(pref){
+  state.sourcePref = pref;
+  saveSettings();
+  const current = currentEpisodeNum;
+  if(current){
+    playEpisode(current);
+  }
 }
 
 // HLS.js quality switching via the manifest's renditions.
