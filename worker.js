@@ -188,9 +188,15 @@ async function handleProxy(request, url) {
   }
 
   try {
+    // Match the Origin header to the referer's origin — otakuvid's CDN only
+    // serves requests whose Origin/Referer is otakuvid.online; megavid's CDN
+    // expects megavid.buzz. Sending a fixed megavid origin made otakuvid
+    // requests intermittently hang or get rejected.
+    let origin;
+    try { origin = new URL(referer).origin; } catch { origin = MEGAVID_BASE; }
     const res = await edgeFetch(targetUrl.href, {
       referer: referer,
-      origin: MEGAVID_BASE,
+      origin: origin,
       accept: isPlaylistByPath
         ? "application/vnd.apple.mpegurl, application/x-mpegURL, */*"
         : "*/*",
@@ -261,16 +267,26 @@ async function handleProxy(request, url) {
     // VOD files, so cache them hard (7 days) in the browser AND on Cloudflare's
     // edge. First watch = ~200 requests; every re-watch = 0 requests served
     // straight from cache, which is what keeps us far under the 100k/day cap.
-    const buffer = await res.arrayBuffer();
-    const payload = stripPngMask(new Uint8Array(buffer));
     const oneDay = 86400;
     const cacheSecs = isSub ? oneDay : 7 * oneDay;
-    return new Response(payload, {
-      headers: corsHeaders({
-        "Content-Type": isSub ? "text/vtt; charset=utf-8" : contentType,
-        "Cache-Control": `public, max-age=${cacheSecs}, immutable`,
-      }),
+    const segHeaders = corsHeaders({
+      "Content-Type": isSub ? "text/vtt; charset=utf-8" : contentType,
+      "Cache-Control": `public, max-age=${cacheSecs}, immutable`,
     });
+
+    // otakuvid segments are real MPEG-TS (no PNG mask) and can be slow — the
+    // Death Note test shipped a 2.9MB segment that took 30s+ on a busy CDN.
+    // Buffering the whole body (`arrayBuffer`) blew past the Worker wall-clock
+    // budget and the stream never got a response. Streaming straight through
+    // avoids that: bytes flow chunk-by-chunk, no buffering limit. Megavid
+    // segments carry the PNG mask, so those still buffer + strip first.
+    if (isOtakuvidStream) {
+      return new Response(res.body, { headers: segHeaders });
+    }
+
+    const buffer = await res.arrayBuffer();
+    const payload = stripPngMask(new Uint8Array(buffer));
+    return new Response(payload, { headers: segHeaders });
   } catch (e) {
     return new Response("Proxy error: " + e.message, {
       status: 502,

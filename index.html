@@ -4623,6 +4623,10 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
       track.src = t.file;
       track.label = t.label || ('Track ' + (i+1));
       track.default = (i === 0);
+      // Without this the browser refuses cross-origin VTT ("Unsafe attempt to
+      // load URL ... Domains must match"). Our proxy returns ACAO:* so CORS
+      // loads fine once the attribute is set.
+      track.crossOrigin = 'anonymous';
       vid.appendChild(track);
     });
   };
