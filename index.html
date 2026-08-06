@@ -155,6 +155,9 @@
   .row-scroll{ display:flex; gap:12px; overflow-x:auto; padding: 0 18px; scroll-snap-type: x proximity; }
 
   .card{
+    content-visibility:auto;
+    contain-intrinsic-size:auto 260px;
+  }
     scroll-snap-align:start; flex-shrink:0; width: 132px; border-radius:var(--radius-card); overflow:hidden;
     background: var(--card); border:1px solid var(--line); transition: transform .18s cubic-bezier(.2,.8,.2,1), box-shadow .18s ease;
     animation: cardIn .3s cubic-bezier(.2,.8,.2,1) backwards;
@@ -226,7 +229,7 @@
   .detail-actions .btn-primary, .detail-actions .btn-ghost{ flex:1; padding:13px; font-size:14.5px; }
 
   .ep-section-title{ font-size:15px; font-weight:700; margin-bottom:12px; }
-  .ep-row{ display:flex; align-items:center; gap:12px; padding: 11px; border-radius:13px; margin-bottom:8px; background: var(--bg-elevated); border:1px solid var(--line); }
+  .ep-row{ display:flex; align-items:center; gap:12px; padding: 11px; border-radius:13px; margin-bottom:8px; background: var(--bg-elevated); border:1px solid var(--line); content-visibility:auto; contain-intrinsic-size:auto 64px; }
   .ep-thumb{ width:78px; height:52px; border-radius:9px; flex-shrink:0; background: linear-gradient(160deg,#232838,#14161f); display:flex; align-items:center; justify-content:center; font-size:16px; opacity:0.5; }
   .ep-num{ font-size:11px; font-weight:700; color:var(--accent); margin-bottom:2px; }
   .ep-name{ font-size:13px; font-weight:600; }
@@ -449,7 +452,7 @@
   <div class="search-wrap">
     <div class="search-box">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="text" id="searchInput" data-i18n-placeholder="search.placeholder" placeholder="Anime adı yaz..." oninput="renderSearch()">
+      <input type="text" id="searchInput" data-i18n-placeholder="search.placeholder" placeholder="Anime adı yaz..." oninput="debouncedRenderSearch()">
     </div>
   </div>
   <div id="searchResults" style="padding:0 18px; display:flex; flex-direction:column; gap:10px;"></div>
@@ -750,7 +753,7 @@
     <div class="search-wrap" style="padding-top:0;">
       <div class="search-box">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="manageSearchInput" data-i18n-placeholder="search.placeholder" placeholder="Kitabxanada axtar..." oninput="renderLibraryManage()">
+        <input type="text" id="manageSearchInput" data-i18n-placeholder="search.placeholder" placeholder="Kitabxanada axtar..." oninput="debouncedRenderLibraryManage()">
       </div>
     </div>
     <div id="libraryManageList" style="padding:0 18px 16px;"></div>
@@ -816,7 +819,7 @@
   <div class="search-wrap">
     <div class="search-box">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="text" id="catPickerSearch" data-i18n-placeholder="search.placeholder" placeholder="Kitabxanada axtar..." oninput="renderCatPickerList()">
+      <input type="text" id="catPickerSearch" data-i18n-placeholder="search.placeholder" placeholder="Kitabxanada axtar..." oninput="debouncedRenderCatPickerList()">
     </div>
   </div>
   <div id="catPickerList" style="padding:0 18px 18px; display:flex; flex-direction:column; gap:10px;"></div>
@@ -1134,6 +1137,7 @@ let state = {
   userRatings: {},   // { animeId: 1-10 }
   communityRatings: {}, // { animeId: {avg, count} } — aggregated from all users
   episodeProgress: {},  // { "animeId:episode": true }
+  brokenSources: {},   // { "animeId:episode": true } — otakuvid başarısız oldu, bir sonraki açılışta Megavid dene
   feedConfig: null,     // { provider:'nyaa-en', url:'...' } — admin feed kaynağı
   sourcePref: 'auto'    // 'auto' | 'anineko' | 'megavid' — bölüm kaynak önceliği
   ,directOtaku: false   // Otakuvid Direkt Mod: segment'ler doğrudan CDN'den (0 worker isteği)
@@ -1363,30 +1367,71 @@ function withTimeout(promise, ms){
   ]);
 }
 
+// Local mirror of the Supabase library so the home page renders instantly on
+// the next visit (slow mobile networks no longer block first paint on a
+// 5s-timeout DB fetch). Refreshed in the background on every boot and after
+// every admin library mutation.
+const LIBRARY_CACHE_KEY = 'anivax_library_cache_v1';
+function cacheLibrary(){
+  try{
+    if(state.library && state.library.length){
+      localStorage.setItem(LIBRARY_CACHE_KEY, JSON.stringify(state.library));
+    }
+  }catch(e){}
+}
+
 async function loadState(){
   try{
     const saved = JSON.parse(localStorage.getItem('anivax_settings') || '{}');
     state = {...state, ...saved};
   }catch(e){}
 
+  // 1) Anında render: yerel önbellekten kütüphane gelirse home hemen çizilir,
+  //    ağ yanıtı beklenmez (eski davranış: 6 seri fetch bitene kadar boş ekran).
+  let renderedFromCache = false;
   try{
-    const { data, error } = await withTimeout(sb.from('library').select('id, data').order('created_at'), 5000);
-    if(!error && data) state.library = data.map(row => row.data);
-  }catch(e){ console.error('loadState: library fetch failed', e); }
+    const cached = JSON.parse(localStorage.getItem(LIBRARY_CACHE_KEY) || '[]');
+    if(Array.isArray(cached) && cached.length && state.library.length === 0){
+      state.library = cached;
+      renderedFromCache = true;
+      try{ renderHome(); }catch(e){ console.error('loadState: cached renderHome failed', e); }
+    }
+  }catch(e){}
 
-  try{
-    const { data, error } = await withTimeout(sb.from('categories').select('*').order('created_at'), 5000);
-    if(!error && data) state.categories = data.map(row => ({ id: row.id, name: row.name, animeIds: row.anime_ids || [] }));
-  }catch(e){ console.error('loadState: categories fetch failed', e); }
+  // 2) Tüm bağımsız verileri paralel çek (önceden seri, en kötü 30s).
+  await Promise.all([
+    (async ()=>{
+      try{
+        const { data, error } = await withTimeout(sb.from('library').select('id, data').order('created_at'), 5000);
+        if(!error && data){
+          const fresh = data.map(row => row.data);
+          const changed = JSON.stringify(fresh) !== JSON.stringify(state.library);
+          state.library = fresh;
+          if(changed) cacheLibrary();
+          if(changed) renderedFromCache = false; // yeni içerik geldi → yeniden render
+        }
+      }catch(e){ console.error('loadState: library fetch failed', e); }
+    })(),
+    (async ()=>{
+      try{
+        const { data, error } = await withTimeout(sb.from('categories').select('*').order('created_at'), 5000);
+        if(!error && data) state.categories = data.map(row => ({ id: row.id, name: row.name, animeIds: row.anime_ids || [] }));
+      }catch(e){ console.error('loadState: categories fetch failed', e); }
+    })(),
+    (async ()=>{ try{ await loadCommunityRatings(); }catch(e){ console.error('loadState: loadCommunityRatings failed', e); } })()
+  ]);
 
+  // 3) Kullanıcıya özel veriler currentUser'a bağlı → önce o, sonra ikisi paralel.
   try{ await refreshCurrentUser(); }catch(e){ console.error('loadState: refreshCurrentUser failed', e); }
-  try{ await loadWatchHistory(); }catch(e){ console.error('loadState: loadWatchHistory failed', e); }
-  try{ await loadUserAnimeData(); }catch(e){ console.error('loadState: loadUserAnimeData failed', e); }
-  try{ await loadCommunityRatings(); }catch(e){ console.error('loadState: loadCommunityRatings failed', e); }
+  try{
+    await Promise.all([ loadWatchHistory(), loadUserAnimeData() ]);
+  }catch(e){ console.error('loadState: user data failed', e); }
 
   try{ applyI18n(); }catch(e){ console.error('loadState: applyI18n failed', e); }
   try{ applyTheme(); }catch(e){ console.error('loadState: applyTheme failed', e); }
-  try{ renderHome(); }catch(e){ console.error('loadState: renderHome failed', e); }
+  if(!renderedFromCache){
+    try{ renderHome(); }catch(e){ console.error('loadState: renderHome failed', e); }
+  }
 }
 
 // Loads this user's per-anime status (watching/planned/etc), 1-10 ratings, and
@@ -1432,15 +1477,16 @@ function saveSettings(){
   try{ localStorage.setItem('anivax_settings', JSON.stringify({
     lang: state.lang, theme: state.theme, autoplay: state.autoplay, skipIntro: state.skipIntro,
     feedConfig: state.feedConfig || null, sourcePref: state.sourcePref || 'auto',
-    directOtaku: state.directOtaku || false
+    directOtaku: state.directOtaku || false,
+    brokenSources: state.brokenSources || {}
   })); }catch(e){}
 }
 
 async function saveLibraryEntry(media){
-  try{ await sb.from('library').upsert({ id: media.id, data: media, updated_at: new Date().toISOString() }); }catch(e){}
+  try{ await sb.from('library').upsert({ id: media.id, data: media, updated_at: new Date().toISOString() }); cacheLibrary(); }catch(e){}
 }
 async function deleteLibraryEntry(id){
-  try{ await sb.from('library').delete().eq('id', id); }catch(e){}
+  try{ await sb.from('library').delete().eq('id', id); cacheLibrary(); }catch(e){}
 }
 // Persists the whole in-memory library — used after edits that touch nested
 // data (seasons, episodeSources) where we already have the target object.
@@ -1449,6 +1495,7 @@ async function saveLibrary(){
     for(const m of state.library){
       await sb.from('library').upsert({ id: m.id, data: m, updated_at: new Date().toISOString() });
     }
+    cacheLibrary();
   }catch(e){}
 }
 async function saveCategories(){
@@ -2189,6 +2236,16 @@ async function aninekoResolveSource(anime, episodeNum){
 // dramiyos/.cfd CDN'i token'ı IP'ye kilitler ve CORS'u sadece otakuvid.online'a
 // açar. Worker bu yüzden hem playlist'i rewrite eder hem de segmentleri çeker.
 async function loadAninekoSourceIfNeeded(frame, anime, episodeNum){
+  // Daha önce bu bölümde otakuvid başarısız olduysa bu sefer otakuvidi atla,
+  // zincir doğrudan Megavid'i denesin.
+  if(isSourceBroken(anime && anime.id, episodeNum)){
+    if(currentEpisodeNum === episodeNum){
+      showPlayerToast((state.lang==='en' ? 'Otakuvid failed before — using Megavid'
+        : (state.lang==='tr' ? 'Otakuvid daha önce başarısız oldu — Megavid kullanılıyor'
+           : 'Otakuvid əvvəllər uğursuz oldu — Megavid istifadə olunur')));
+    }
+    return false;
+  }
   const data = await aninekoResolveSource(anime, episodeNum);
   if(!data) return false;
   if(currentEpisodeNum !== episodeNum) return false;
@@ -2217,12 +2274,14 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum){
     // gerçekten oynayana kadar bekliyoruz; oynamazsa false → Megavid denenecek.
     if(!(await waitForPlayback(episodeNum, 9000))){
       if(currentEpisodeNum === episodeNum){
+        markSourceBroken(anime && anime.id, episodeNum);
         showPlayerToast((state.lang==='en' ? 'Otakuvid didn\'t play — switching to Megavid'
           : (state.lang==='tr' ? 'Otakuvid oynatamadı — Megavid\'e geçiliyor'
              : 'Otakuvid oynada bilmədi — Megavid\'ə keçilir')));
       }
       return false;
     }
+    clearSourceBroken(anime && anime.id, episodeNum);
     return true;
   }
   return false;
@@ -2242,6 +2301,29 @@ async function waitForPlayback(episodeNum, timeoutMs){
     };
     check();
   });
+}
+
+// Otakuvid bu bölümde başarısız olduysa hatırla → bir sonraki açılışta otakuvidi
+// atlayıp doğrudan Megavid dene (kullanıcı her seferinde 9s beklemek zorunda kalmasın).
+function markSourceBroken(animeId, episodeNum){
+  if(!animeId || !episodeNum) return;
+  state.brokenSources = state.brokenSources || {};
+  state.brokenSources[animeId + ':' + episodeNum] = true;
+  // Sınırsız büyümesin — 100 kayıt tut, en eskisini at.
+  const keys = Object.keys(state.brokenSources);
+  if(keys.length > 100){
+    const toDrop = keys.slice(0, keys.length - 100);
+    toDrop.forEach(k => delete state.brokenSources[k]);
+  }
+  saveSettings();
+}
+function clearSourceBroken(animeId, episodeNum){
+  if(!animeId || !episodeNum) return;
+  if(!state.brokenSources) return;
+  if(delete state.brokenSources[animeId + ':' + episodeNum]) saveSettings();
+}
+function isSourceBroken(animeId, episodeNum){
+  return !!(state.brokenSources && state.brokenSources[animeId + ':' + episodeNum]);
 }
 
 // AniList id + idMal kullanarak Megavid'den m3u8 + softsub listesi alır.
@@ -2302,41 +2384,48 @@ function mountMegavidIframe(frame, anime, episodeNum){
 
 // Ana akış: mevcut kaynak yoksa / torrent çözülemezse Megavid'i otomatik dene.
 // Başarılı olursa kendi player'ımız (HLS.js) + softsub ile oynatır.
-async function loadMegavidSourceIfNeeded(frame, anime, episodeNum){
-  const src = anime && anime.episodeSources ? anime.episodeSources[episodeNum] : null;
-  const hasTorrent = src && Array.isArray(src.torrents) && src.torrents.length > 0;
-  const hasVideo = !!(src && src.video);
+// Çift fallback race'i: attachHlsErrorRecovery ile waitForPlayback ikisi de
+// Megavid'i çağırabilir — aynı promise'i paylaşarak çift mount'u önleriz.
+let megavidLoadPromise = null;
+function loadMegavidSourceIfNeeded(frame, anime, episodeNum){
+  if(megavidLoadPromise) return megavidLoadPromise;
+  megavidLoadPromise = (async ()=>{
+    const src = anime && anime.episodeSources ? anime.episodeSources[episodeNum] : null;
+    const hasTorrent = src && Array.isArray(src.torrents) && src.torrents.length > 0;
+    const hasVideo = !!(src && src.video);
 
-  // Mevcut oynatılabilir kaynak varsa karışma.
-  if(hasTorrent || hasVideo) return false;
+    // Mevcut oynatılabilir kaynak varsa karışma.
+    if(hasTorrent || hasVideo) return false;
 
-  const data = await megavidResolveSource(anime, episodeNum);
-  if(!data) return false;
-  if(currentEpisodeNum !== episodeNum) return false;
+    const data = await megavidResolveSource(anime, episodeNum);
+    if(!data) return false;
+    if(currentEpisodeNum !== episodeNum) return false;
 
-  currentMegavidUrl = data.source;
-  const referer = 'https://megavid.buzz/';
-  const playUrl = megavidProxyUrl(data.source, referer);
-  const subTracks = (Array.isArray(data.tracks) ? data.tracks : []).map(t => ({
-    file: megavidProxyUrl(t.file, referer),
-    label: t.label || 'English'
-  }));
-  megavidSubtitleUrl = subTracks.length ? subTracks[0].file : null;
+    currentMegavidUrl = data.source;
+    const referer = 'https://megavid.buzz/';
+    const playUrl = megavidProxyUrl(data.source, referer);
+    const subTracks = (Array.isArray(data.tracks) ? data.tracks : []).map(t => ({
+      file: megavidProxyUrl(t.file, referer),
+      label: t.label || 'English'
+    }));
+    megavidSubtitleUrl = subTracks.length ? subTracks[0].file : null;
 
-  // HLS.js Safari'de native çalışır, diğer tarayıcılarda hls.js kullanır.
-  if(playUrl){
-    removeVideoElements();
-    currentSourceLabel = 'megavid';
-    if(window.Hls || vidCanNativeHls()){
-      await mountHlsPlayer(frame, playUrl, subTracks);
-    } else {
-      await ensureHlsJs();
-      if(window.Hls) await mountHlsPlayer(frame, playUrl, subTracks);
-      else mountMegavidIframe(frame, anime, episodeNum);
+    // HLS.js Safari'de native çalışır, diğer tarayıcılarda hls.js kullanır.
+    if(playUrl){
+      removeVideoElements();
+      currentSourceLabel = 'megavid';
+      if(window.Hls || vidCanNativeHls()){
+        await mountHlsPlayer(frame, playUrl, subTracks);
+      } else {
+        await ensureHlsJs();
+        if(window.Hls) await mountHlsPlayer(frame, playUrl, subTracks);
+        else mountMegavidIframe(frame, anime, episodeNum);
+      }
+      return true;
     }
-    return true;
-  }
-  return false;
+    return false;
+  })().finally(()=>{ megavidLoadPromise = null; });
+  return megavidLoadPromise;
 }
 
 function vidCanNativeHls(){
@@ -3158,6 +3247,17 @@ function renderCategoryRows(){
     </div>`;
   }).join('');
 }
+
+function debounce(fn, ms){
+  let t;
+  return function(...args){
+    clearTimeout(t);
+    t = setTimeout(()=> fn.apply(this, args), ms);
+  };
+}
+const debouncedRenderSearch = debounce(renderSearch, 200);
+const debouncedRenderLibraryManage = debounce(renderLibraryManage, 200);
+const debouncedRenderCatPickerList = debounce(renderCatPickerList, 200);
 
 function renderSearch(){
   const q = document.getElementById('searchInput').value.trim().toLowerCase();
@@ -4272,7 +4372,9 @@ function loadEpisodeIntoPlayer(episodeNum){
       loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
         if(!didPlay && currentEpisodeNum === episodeNum){
           loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum).then(didAnineko => {
-            if(!didAnineko && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl') && !document.getElementById('megavidIframe')){
+            // Bozuk otakuvid mount'u DOM'da kalsa bile iframe yedeği kurulur
+            // (mountMegavidIframe kendisi temizler).
+            if(!didAnineko && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
               mountMegavidIframe(frame, currentDetail, episodeNum);
             }
           });
@@ -4282,7 +4384,7 @@ function loadEpisodeIntoPlayer(episodeNum){
       loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
         if(!didPlay && currentEpisodeNum === episodeNum){
           loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
-            if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl') && !document.getElementById('megavidIframe')){
+            if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
               mountMegavidIframe(frame, currentDetail, episodeNum);
             }
           });
@@ -4643,12 +4745,25 @@ function ensureHlsJs(){
 // "freezing/takılma" often actually is: an unhandled error state, not real load.
 function attachHlsErrorRecovery(hls, vid){
   let networkRetries = 0;
+  let mediaRecoveries = 0;
   hls.on(Hls.Events.ERROR, (event, data)=>{
     if(!data.fatal) return; // non-fatal errors are normal and self-heal
     console.warn('[anivax] HLS fatal error:', data.type, data.details, data.frag && data.frag.url);
+    // Ortak son-çare: otakuvid bu bölümde gerçekten oynatamıyorsa Megavid'e geç.
+    const fallbackToMegavid = ()=>{
+      if(currentSourceLabel === 'otakuvid' && currentEpisodeNum && currentDetail){
+        markSourceBroken(currentDetail.id, currentEpisodeNum);
+        showPlayerToast((state.lang==='en' ? 'Otakuvid failed — switching to Megavid'
+          : (state.lang==='tr' ? 'Otakuvid başarısız — Megavid\'e geçiliyor'
+             : 'Otakuvid uğursuz oldu — Megavid\'ə keçilir')));
+        loadMegavidSourceIfNeeded(document.getElementById('playerFrame'), currentDetail, currentEpisodeNum).then(()=>{});
+        return true;
+      }
+      return false;
+    };
     switch(data.type){
       case Hls.ErrorTypes.NETWORK_ERROR:
-        if(networkRetries < 3){
+        if(networkRetries < 2){ // eski: 3 — Megavid'e daha erken geç
           networkRetries++;
           hls.startLoad(); // retry loading the current position
         } else {
@@ -4664,29 +4779,30 @@ function attachHlsErrorRecovery(hls, vid){
             playEpisode(currentEpisodeNum);
             return;
           }
-          // Otakuvid segmentleri hâlâ yüklenemiyorsa (429, bozuk bölüm) Otomatik
-          // Megavid'e geç — kullanıcıyı siyah/takılı ekranda bekletme.
-          if(currentSourceLabel === 'otakuvid' && currentEpisodeNum){
-            showPlayerToast((state.lang==='en' ? 'Otakuvid failed — switching to Megavid'
-              : (state.lang==='tr' ? 'Otakuvid başarısız — Megavid\'e geçiliyor'
-                 : 'Otakuvid uğursuz oldu — Megavid\'ə keçilir')));
-            loadMegavidSourceIfNeeded(document.getElementById('playerFrame'), currentDetail, currentEpisodeNum).then(()=>{});
-            return;
-          }
+          if(fallbackToMegavid()) return;
           showPlayerToast((state.lang==='en'?'Video couldn\'t load — try a different source':(state.lang==='tr'?'Video yüklenemedi — farklı bir kaynak dene':'Video yüklənə bilmədi — başqa mənbə sına')));
           showPlayerPlaceholder();
         }
         break;
       case Hls.ErrorTypes.MEDIA_ERROR:
-        hls.recoverMediaError(); // built-in hls.js recovery for decode errors
+        if(mediaRecoveries < 1){
+          mediaRecoveries++;
+          hls.recoverMediaError(); // built-in hls.js recovery for decode errors
+        } else if(fallbackToMegavid()){
+          return;
+        } else {
+          showPlayerToast((state.lang==='en'?'Video couldn\'t load — try a different source':(state.lang==='tr'?'Video yüklenemedi — farklı bir kaynak dene':'Video yüklənə bilmədi — başqa mənbə sına')));
+          showPlayerPlaceholder();
+        }
         break;
       default:
+        if(fallbackToMegavid()) return;
         showPlayerToast((state.lang==='en'?'Playback error — try a different source':(state.lang==='tr'?'Oynatma hatası — farklı bir kaynak dene':'Oxutma xətası — başqa mənbə sına')));
         showPlayerPlaceholder();
         break;
     }
   });
-  vid.addEventListener('playing', ()=>{ networkRetries = 0; }); // reset once playback is healthy again
+  vid.addEventListener('playing', ()=>{ networkRetries = 0; mediaRecoveries = 0; }); // reset once playback is healthy again
 }
 
 async function mountHlsPlayer(frame, url, subtitleTracks){
@@ -5009,6 +5125,12 @@ function setPlaybackSpeed(speed, btn){
 // Otakuvid/Megavid önceliğini değiştirir, kaydeder ve mevcut bölümü yeniden yükler.
 function setSourcePref(pref){
   state.sourcePref = pref;
+  // Kullanıcı açıkça Otakuvid'i seçtiyse bozuk-bölüm hafızasını temizle
+  // (tekrar denemek istiyor demektir).
+  if(pref === 'anineko' && currentDetail){
+    const ep = currentEpisodeNum;
+    if(ep) clearSourceBroken(currentDetail.id, ep);
+  }
   saveSettings();
   const current = currentEpisodeNum;
   if(current){
