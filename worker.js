@@ -204,26 +204,31 @@ async function handleProxy(request, url) {
 
     if (isPlaylist) {
       // Rewrite playlist lines: absolute/relative segment + key URIs become
-      // /proxy?url=<encoded>&referer=<encoded>.
+      // /proxy?url=<encoded>&referer=<encoded>. Also rewrite URI="..." inside
+      // tag lines (e.g. #EXT-X-I-FRAME-STREAM-INF) so iframe playlists flow
+      // through the proxy too.
+      const proxify = (u) =>
+        base.origin + "/proxy?url=" + encodeURIComponent(u) + "&referer=" + encodeURIComponent(referer);
       const text = await res.text();
       const rewritten = text
         .split("\n")
         .map((line) => {
           const l = line.trim();
-          if (!l || l.startsWith("#")) return line;
+          if (!l) return line;
+          if (l.startsWith("#EXT-X-I-FRAME-STREAM-INF")) {
+            return l.replace(/URI="([^"]+)"/g, (m, uri) => {
+              try { return `URI="${proxify(new URL(uri, targetUrl.href).href)}"`; }
+              catch { return m; }
+            });
+          }
+          if (l.startsWith("#")) return line;
           let abs;
           try {
             abs = new URL(l, targetUrl.href);
           } catch {
             return line;
           }
-          const proxied =
-            base.origin +
-            "/proxy?url=" +
-            encodeURIComponent(abs.href) +
-            "&referer=" +
-            encodeURIComponent(referer);
-          return line.replace(l, proxied);
+          return line.replace(l, proxify(abs.href));
         })
         .join("\n");
       return new Response(rewritten, {
