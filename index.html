@@ -1625,6 +1625,7 @@ async function anilistSearch(query){
       Page(page:1, perPage:12){
         media(search:$search, type: ANIME, sort: POPULARITY_DESC){
           id
+          idMal
           title{ romaji english native }
           coverImage{ large color }
           bannerImage
@@ -1666,7 +1667,7 @@ async function anilistById(id){
   const gql = `
     query ($id: Int) {
       Media(id:$id, type: ANIME){
-        id title{ romaji english native } coverImage{ large color } bannerImage
+        id idMal title{ romaji english native } coverImage{ large color } bannerImage
         description(asHtml:false) episodes genres seasonYear averageScore status format studios(isMain:true){ nodes{ name } }
         nextAiringEpisode{ episode }
         relations{ edges{ relationType node{ id type format title{ romaji english native } coverImage{ large } episodes seasonYear } } }
@@ -1690,7 +1691,7 @@ async function anilistTrending(){
     query {
       Page(page:1, perPage:12){
         media(type: ANIME, sort: TRENDING_DESC){
-          id title{ romaji english native } coverImage{ large color } bannerImage
+          id idMal title{ romaji english native } coverImage{ large color } bannerImage
           description(asHtml:false) episodes genres seasonYear averageScore status format studios(isMain:true){ nodes{ name } }
           nextAiringEpisode{ episode }
           relations{
@@ -2153,6 +2154,107 @@ async function lazyFetchEpisodeSource(episodeNum){
   if(!es.torrents.includes(url)) es.torrents.push(url);
   if(!anime.episodes || episodeNum > anime.episodes) anime.episodes = episodeNum;
   return true;
+}
+
+// ================= MEGAVID / CLOUDFLARE WORKER SOURCING =================
+// Megavid, bir anime+bölümü kendi JSON API'si üzerinden çözer (şifreli JS
+// çözmeye gerek yok): /source isteği m3u8 + .vtt softsub döndürür. CORS engeli
+// olduğu için media istekleri Cloudflare Worker (/proxy) üzerinden geçer.
+const MEGAVID_WORKER_BASE = 'https://anivax-proxy.YOUR_SUBDOMAIN.workers.dev';
+
+let currentMegavidUrl = null;      // resolved m3u8 for the active episode
+let megavidSubtitleUrl = null;     // .vtt track routed through the worker
+
+// AniList id + idMal kullanarak Megavid'den m3u8 + softsub listesi alır.
+async function megavidResolveSource(anime, episodeNum){
+  const idMal = anime.idMal || null;
+  const idAni = anime.id;
+  if(!idAni && !idMal) return null;
+
+  const attempts = [];
+  if(idMal) attempts.push(`idType=mal&id=${encodeURIComponent(idMal)}`);
+  if(idAni) attempts.push(`idType=ani&id=${encodeURIComponent(idAni)}`);
+
+  for(const qs of attempts){
+    const url = `${MEGAVID_WORKER_BASE}/source?${qs}&ep=${episodeNum}&lang=sub`;
+    try{
+      const res = await fetch(url);
+      const data = await res.json().catch(()=>null);
+      if(res.ok && data && data.status === 'ok' && data.source) return data;
+    }catch(e){ /* try next id namespace */ }
+  }
+  return null;
+}
+
+// m3u8 ve .vtt dosyalarını Worker /proxy üzerinden geçirerek oynatılabilir
+// URL'ler üretir (CORS + Referer işini Worker halleder).
+function megavidProxyUrl(rawUrl, referer){
+  if(!rawUrl) return '';
+  return `${MEGAVID_WORKER_BASE}/proxy?url=${encodeURIComponent(rawUrl)}&referer=${encodeURIComponent(referer || 'https://megavid.buzz/')}`;
+}
+
+// Megavid iframe yedeği: Worker/çözücü kırılırsa kaynak site kendi player'ıyla
+// oynatır (softsub Megavid'in player'ında görünür).
+function mountMegavidIframe(frame, anime, episodeNum){
+  removeVideoElements();
+  const idType = anime.idMal ? 'mal' : 'ani';
+  const id = anime.idMal || anime.id;
+  const iframe = document.createElement('iframe');
+  iframe.id = 'megavidIframe';
+  iframe.src = `https://megavid.buzz/${idType}/${id}/${episodeNum}/sub?autoplay=true`;
+  iframe.style.cssText = 'width:100%; height:100%; border:0; background:#000;';
+  iframe.allow = 'accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture';
+  iframe.allowFullscreen = true;
+  frame.appendChild(iframe);
+  showPlayerToast(state.lang==='en' ? 'Playing via Megavid (streamer player)' : (state.lang==='tr' ? 'Megavid player ile oynatılıyor' : 'Megavid player ilə oynadılır'));
+}
+
+// Ana akış: mevcut kaynak yoksa / torrent çözülemezse Megavid'i otomatik dene.
+// Başarılı olursa kendi player'ımız (HLS.js) + softsub ile oynatır.
+async function loadMegavidSourceIfNeeded(frame, anime, episodeNum){
+  const src = anime && anime.episodeSources ? anime.episodeSources[episodeNum] : null;
+  const hasTorrent = src && Array.isArray(src.torrents) && src.torrents.length > 0;
+  const hasVideo = !!(src && src.video);
+
+  // Mevcut oynatılabilir kaynak varsa karışma.
+  if(hasTorrent || hasVideo) return false;
+
+  const data = await megavidResolveSource(anime, episodeNum);
+  if(!data) return false;
+  if(currentEpisodeNum !== episodeNum) return false;
+
+  currentMegavidUrl = data.source;
+  const referer = 'https://megavid.buzz/';
+  const playUrl = megavidProxyUrl(data.source, referer);
+  const subTrack = Array.isArray(data.tracks) && data.tracks[0] ? data.tracks[0] : null;
+  megavidSubtitleUrl = subTrack ? megavidProxyUrl(subTrack.file, referer) : null;
+
+  // HLS.js Safari'de native çalışır, diğer tarayıcılarda hls.js kullanır.
+  if(playUrl){
+    removeVideoElements();
+    if(window.Hls || vidCanNativeHls()){
+      await mountHlsPlayer(frame, playUrl, megavidSubtitleUrl);
+    } else {
+      await ensureHlsJs();
+      if(window.Hls) await mountHlsPlayer(frame, playUrl, megavidSubtitleUrl);
+      else mountMegavidIframe(frame, anime, episodeNum);
+    }
+    return true;
+  }
+  return false;
+}
+
+function vidCanNativeHls(){
+  return document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
+}
+
+function showPlayerToast(msg){
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:absolute; bottom:52px; left:50%; transform:translateX(-50%); background:rgba(10,12,18,0.92); color:#fff; font-size:12px; font-weight:700; padding:8px 14px; border-radius:10px; z-index:30; border:1px solid rgba(255,255,255,0.12);';
+  const frame = document.getElementById('playerFrame');
+  if(frame) frame.appendChild(t);
+  setTimeout(()=>{ try{ t.remove(); }catch(e){} }, 3000);
 }
 
 // Nyaa "view" sayfası URL'ini doğrudan .torrent indirme linkine çevirir.
@@ -4041,14 +4143,19 @@ function loadEpisodeIntoPlayer(episodeNum){
   const hasVideo = !!(src && src.video);
 
   if(!src || (!hasVideo && torrentList.length === 0)){
-    // KAYNAK YOK: kullanıcı bölüme tıkladı — arka planda o bölümün torrentini
-    // feed'den ara, bulunca hemen oynatmaya başla.
+    // KAYNAK YOK: önce mevcut torrent araması (feed) dene, bulunamazsa Megavid
+    // JSON API üzerinden otomatik m3u8 + softsub çöz; o da olmazsa iframe yedeği.
     showPlayerLoading(state.lang==='en' ? 'Searching for episode source...' : (state.lang==='tr' ? 'Bölüm kaynağı aranıyor...' : 'Bölüm üçün mənbə axtarılır...'));
     lazyFetchEpisodeSource(episodeNum).then(found => {
       if(found && currentEpisodeNum === episodeNum){
         loadEpisodeIntoPlayer(episodeNum);
       } else if(currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl')){
-        showPlayerPlaceholder();
+        // Torrent kaynağı yok: Megavid otomatik çözümü devreye girsin.
+        loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
+          if(!didPlay && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl')){
+            showPlayerPlaceholder();
+          }
+        });
       }
     });
     return;
@@ -4096,8 +4203,12 @@ function removeVideoElements(){
   if(yt){
     try{ yt.src = 'about:blank'; }catch(e){} // stops YouTube's iframe playback immediately
   }
+  const mega = document.getElementById('megavidIframe');
+  if(mega){
+    try{ mega.src = 'about:blank'; }catch(e){} // stops Megavid iframe playback
+  }
 
-  ['mainVideoEl','ytPlayerFrame','customControlBar','playerPlaceholder','skipIntroBtn'].forEach(id=>{
+  ['mainVideoEl','ytPlayerFrame','customControlBar','playerPlaceholder','skipIntroBtn','megavidIframe'].forEach(id=>{
     const el = document.getElementById(id);
     if(el) el.remove();
   });
