@@ -2160,7 +2160,7 @@ async function lazyFetchEpisodeSource(episodeNum){
 // Megavid, bir anime+bölümü kendi JSON API'si üzerinden çözer (şifreli JS
 // çözmeye gerek yok): /source isteği m3u8 + .vtt softsub döndürür. CORS engeli
 // olduğu için media istekleri Cloudflare Worker (/proxy) üzerinden geçer.
-const MEGAVID_WORKER_BASE = 'https://anivax-proxy.YOUR_SUBDOMAIN.workers.dev';
+const MEGAVID_WORKER_BASE = 'https://anivax-proxy.wyzexsensei.workers.dev';
 
 let currentMegavidUrl = null;      // resolved m3u8 for the active episode
 let megavidSubtitleUrl = null;     // .vtt track routed through the worker
