@@ -555,6 +555,10 @@
         <div class="settings-label" style="margin-bottom:8px; color:#aaa;" data-i18n="player.quality">Keyfiyyət</div>
         <div class="lang-options" id="qualityOptions" style="padding:0;"></div>
       </div>
+      <div id="subtitleRow" style="margin-bottom:14px;">
+        <div class="settings-label" style="margin-bottom:8px; color:#aaa;" data-i18n="player.subtitles">Altyazı</div>
+        <div class="lang-options" id="subtitleOptions" style="padding:0;"></div>
+      </div>
       <div id="speedRow" style="margin-bottom:14px;">
         <div class="settings-label" style="margin-bottom:8px; color:#aaa;" data-i18n="player.speed">Sürət</div>
         <div class="lang-options" id="speedOptions" style="padding:0;"></div>
@@ -2179,18 +2183,18 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum){
   if(currentEpisodeNum !== episodeNum) return false;
 
   const playUrl = data.source;
-  const subTrack = Array.isArray(data.tracks) && data.tracks[0] ? data.tracks[0].file : null;
+  const subTracks = Array.isArray(data.tracks) ? data.tracks : [];
 
   if(playUrl){
     removeVideoElements();
     if(window.Hls || vidCanNativeHls()){
-      await mountHlsPlayer(frame, playUrl, subTrack);
+      await mountHlsPlayer(frame, playUrl, subTracks);
     } else {
       await ensureHlsJs();
-      if(window.Hls) await mountHlsPlayer(frame, playUrl, subTrack);
+      if(window.Hls) await mountHlsPlayer(frame, playUrl, subTracks);
       else return false;
     }
-    showPlayerToast('Anineko • ' + (data.meta && data.meta.slug ? data.meta.slug : 'otakuvid'));
+    showPlayerToast('Otakuvid • ' + (data.meta && data.meta.slug ? data.meta.slug : 'Anineko'));
     return true;
   }
   return false;
@@ -2257,17 +2261,20 @@ async function loadMegavidSourceIfNeeded(frame, anime, episodeNum){
   currentMegavidUrl = data.source;
   const referer = 'https://megavid.buzz/';
   const playUrl = megavidProxyUrl(data.source, referer);
-  const subTrack = Array.isArray(data.tracks) && data.tracks[0] ? data.tracks[0] : null;
-  megavidSubtitleUrl = subTrack ? megavidProxyUrl(subTrack.file, referer) : null;
+  const subTracks = (Array.isArray(data.tracks) ? data.tracks : []).map(t => ({
+    file: megavidProxyUrl(t.file, referer),
+    label: t.label || 'English'
+  }));
+  megavidSubtitleUrl = subTracks.length ? subTracks[0].file : null;
 
   // HLS.js Safari'de native çalışır, diğer tarayıcılarda hls.js kullanır.
   if(playUrl){
     removeVideoElements();
     if(window.Hls || vidCanNativeHls()){
-      await mountHlsPlayer(frame, playUrl, megavidSubtitleUrl);
+      await mountHlsPlayer(frame, playUrl, subTracks);
     } else {
       await ensureHlsJs();
-      if(window.Hls) await mountHlsPlayer(frame, playUrl, megavidSubtitleUrl);
+      if(window.Hls) await mountHlsPlayer(frame, playUrl, subTracks);
       else mountMegavidIframe(frame, anime, episodeNum);
     }
     return true;
@@ -3833,6 +3840,8 @@ function saveEpisodeSource(){
 
 let currentEpisodeNum = null;
 let hlsInstance = null;
+let currentHlsLevels = [];       // available renditions of the active HLS stream
+let currentSubtitleTracks = [];  // subtitle track objects for the active episode
 
 function playEpisode(n, skipHistory){
   currentEpisodeNum = n;
@@ -4562,7 +4571,7 @@ function attachHlsErrorRecovery(hls, vid){
   vid.addEventListener('playing', ()=>{ networkRetries = 0; }); // reset once playback is healthy again
 }
 
-async function mountHlsPlayer(frame, url, subtitleUrl){
+async function mountHlsPlayer(frame, url, subtitleTracks){
   const vid = document.createElement('video');
   vid.id = 'mainVideoEl';
   vid.controls = false;
@@ -4574,41 +4583,69 @@ async function mountHlsPlayer(frame, url, subtitleUrl){
   vid.style.background = '#000';
   frame.appendChild(vid);
 
+  // Normalize: single URL string or an array of {file,label}.
+  let tracks = [];
+  if(typeof subtitleTracks === 'string' && subtitleTracks){
+    tracks = [{ file: subtitleTracks, label: state.lang==='en'?'Subtitles':(state.lang==='tr'?'Altyazı':'Altyazı') }];
+  } else if(Array.isArray(subtitleTracks)){
+    tracks = subtitleTracks.slice();
+  }
+  currentSubtitleTracks = tracks;
+
+  const addTracks = ()=>{
+    vid.querySelectorAll('track').forEach(t=>t.remove());
+    tracks.forEach((t,i)=>{
+      const track = document.createElement('track');
+      track.kind = 'subtitles';
+      track.src = t.file;
+      track.label = t.label || ('Track ' + (i+1));
+      track.default = (i === 0);
+      vid.appendChild(track);
+    });
+  };
+
   if(vid.canPlayType('application/vnd.apple.mpegurl')){
     // Safari/iOS play HLS natively — no library needed, and it's the fastest path there.
     vid.src = url;
-  } else {
-    try{
-      await ensureHlsJs();
-      // Tuned for smooth playback: enough buffer ahead to absorb network
-      // hiccups without starving, but capped so seeking/switching quality
-      // doesn't feel sluggish from an overly large buffer.
-      hlsInstance = new Hls({
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        maxBufferSize: 60 * 1000 * 1000, // 60MB cap, avoids unbounded memory growth on long episodes
-        startLevel: -1, // let hls.js auto-pick the best starting quality for the connection
-        enableWorker: true,
-        lowLatencyMode: false,
-        backBufferLength: 30 // discard buffer more than 30s behind playhead, frees memory during long sessions
-      });
-      hlsInstance.loadSource(url);
-      hlsInstance.attachMedia(vid);
-      attachHlsErrorRecovery(hlsInstance, vid);
-    }catch(e){
-      showPlayerPlaceholder();
-      return;
-    }
+    addTracks();
+    attachPlayerBehaviors(vid, frame);
+    buildPlayerSettingsPanel(null);
+    return;
   }
-  if(subtitleUrl){
-    const track = document.createElement('track');
-    track.kind = 'subtitles';
-    track.src = subtitleUrl;
-    track.default = true;
-    track.label = state.lang==='en'?'Subtitles':(state.lang==='tr'?'Altyazı':'Altyazı');
-    vid.appendChild(track);
+
+  try{
+    await ensureHlsJs();
+    // Tuned for smooth playback: enough buffer ahead to absorb network
+    // hiccups without starving, but capped so seeking/switching quality
+    // doesn't feel sluggish from an overly large buffer.
+    hlsInstance = new Hls({
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      maxBufferSize: 60 * 1000 * 1000, // 60MB cap, avoids unbounded memory growth on long episodes
+      startLevel: -1, // let hls.js auto-pick the best starting quality for the connection
+      enableWorker: true,
+      lowLatencyMode: false,
+      backBufferLength: 30 // discard buffer more than 30s behind playhead, frees memory during long sessions
+    });
+
+    // Populate the quality pills from the parsed manifest's renditions.
+    hlsInstance.on(Hls.Events.MANIFEST_PARSED, ()=>{
+      currentHlsLevels = (hlsInstance ? hlsInstance.levels : []).slice();
+      if(currentHlsLevels.length){
+        buildPlayerSettingsPanel(null);
+      }
+    });
+
+    hlsInstance.loadSource(url);
+    hlsInstance.attachMedia(vid);
+    attachHlsErrorRecovery(hlsInstance, vid);
+    addTracks();
+    attachPlayerBehaviors(vid, frame);
+    buildPlayerSettingsPanel(null);
+  }catch(e){
+    showPlayerPlaceholder();
+    return;
   }
-  attachPlayerBehaviors(vid, frame);
 }
 
 function stopPlayerAndGoBack(){
@@ -4680,11 +4717,22 @@ function buildPlayerSettingsPanel(src){
     srcRow.classList.add('hidden');
   }
 
-  // Quality: only shown if the admin provided multiple resolution links (src.qualities),
-  // e.g. {qualities: {"1080p": "...", "720p": "...", "480p": "..."}}
+  // Quality: HLS.js manifest'inden gelen seviyeler önceliklidir (otakuvid/megavid),
+  // yoksa admin'in src.qualities kısmı (çoklu çözünürlük linkleri) kullanılır.
   const qWrap = document.getElementById('qualityOptions');
   const qRow = document.getElementById('qualityRow');
-  if(src.qualities && Object.keys(src.qualities).length > 0){
+  const vid = document.getElementById('mainVideoEl');
+
+  if(hlsInstance && currentHlsLevels.length > 0){
+    qRow.classList.remove('hidden');
+    const labels = currentHlsLevels.map((l,i)=>{
+      const h = l.height || l.bitrate;
+      const name = l.height ? l.height + 'p' : (l.bitrate ? Math.round(l.bitrate/1000) + 'kbps' : 'Level ' + i);
+      return { name, i };
+    });
+    qWrap.innerHTML = `<button class="option-pill ${hlsInstance.currentLevel === -1 ? 'active':''}" onclick="switchHlsQuality(-1)">${state.lang==='en'?'Auto':(state.lang==='tr'?'Otomatik':'Avtomatik')}</button>` +
+      labels.map(({name,i})=>`<button class="option-pill ${hlsInstance.currentLevel === i ? 'active':''}" onclick="switchHlsQuality(${i})">${name}</button>`).join('');
+  } else if(src.qualities && Object.keys(src.qualities).length > 0){
     qRow.classList.remove('hidden');
     const currentUrl = document.getElementById('mainVideoEl') ? document.getElementById('mainVideoEl').src : src.video;
     qWrap.innerHTML = Object.entries(src.qualities).map(([label, url])=>`
@@ -4694,10 +4742,21 @@ function buildPlayerSettingsPanel(src){
     qRow.classList.add('hidden');
   }
 
+  // Subtitles: otakuvid/megavid'den gelen tüm track'ler + "kapalı" seçeneği.
+  const subRow = document.getElementById('subtitleRow');
+  const subWrap = document.getElementById('subtitleOptions');
+  if(vid && currentSubtitleTracks.length > 0){
+    subRow.classList.remove('hidden');
+    const activeIdx = activeSubtitleIndex();
+    subWrap.innerHTML = `<button class="option-pill ${activeIdx === -1 ? 'active':''}" onclick="switchSubtitle(-1)">${state.lang==='en'?'Off':(state.lang==='tr'?'Kapalı':'Söndür')}</button>` +
+      currentSubtitleTracks.map((t,i)=>`<button class="option-pill ${activeIdx === i ? 'active':''}" onclick="switchSubtitle(${i})">${t.label || ('Track ' + (i+1))}</button>`).join('');
+  } else {
+    subRow.classList.add('hidden');
+  }
+
   // Playback speed — works for direct/HLS <video>, not applicable to YouTube iframe embeds.
   const sWrap = document.getElementById('speedOptions');
   const sRow = document.getElementById('speedRow');
-  const vid = document.getElementById('mainVideoEl');
   if(vid){
     sRow.classList.remove('hidden');
     const speeds = [0.5, 0.75, 1, 1.25, 1.5, 2];
@@ -4780,6 +4839,42 @@ function setPlaybackSpeed(speed, btn){
   if(vid) vid.playbackRate = speed;
   document.querySelectorAll('#speedOptions .option-pill').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
+}
+
+// HLS.js quality switching via the manifest's renditions.
+// level -1 = auto (hls.js picks the best for the current connection).
+function switchHlsQuality(level){
+  if(!hlsInstance) return;
+  hlsInstance.currentLevel = level;
+  // Pills: [0] = Auto, [1..n] = each rendition in currentHlsLevels order.
+  const pillIdx = level === -1 ? 0 : 1 + currentHlsLevels.findIndex((l,i)=>i===level);
+  const qWrap = document.getElementById('qualityOptions');
+  if(qWrap){
+    Array.from(qWrap.children).forEach((b,i)=>b.classList.toggle('active', i === pillIdx));
+  }
+}
+
+// Returns which subtitle track is currently shown (-1 = none).
+function activeSubtitleIndex(){
+  const vid = document.getElementById('mainVideoEl');
+  if(!vid || !vid.textTracks) return -1;
+  for(let i=0;i<vid.textTracks.length;i++){
+    if(vid.textTracks[i].mode === 'showing') return i;
+  }
+  return -1;
+}
+
+// Switches the active subtitle track (index -1 turns subtitles off).
+function switchSubtitle(index){
+  const vid = document.getElementById('mainVideoEl');
+  if(!vid || !vid.textTracks) return;
+  for(let i=0;i<vid.textTracks.length;i++){
+    vid.textTracks[i].mode = (i === index) ? 'showing' : 'hidden';
+  }
+  const subWrap = document.getElementById('subtitleOptions');
+  if(subWrap){
+    Array.from(subWrap.children).forEach((b,i)=>b.classList.toggle('active', i === index + 1));
+  }
 }
 
 // Maps in-app page names to clean URL paths, and back. This lets the browser's
