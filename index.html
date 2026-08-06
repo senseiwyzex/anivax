@@ -2202,6 +2202,7 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum){
 
   if(playUrl){
     removeVideoElements();
+    currentSourceLabel = 'otakuvid';
     if(window.Hls || vidCanNativeHls()){
       await mountHlsPlayer(frame, playUrl, subTracks);
     } else {
@@ -2210,9 +2211,37 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum){
       else return false;
     }
     showPlayerToast('Otakuvid • ' + (data.meta && data.meta.slug ? data.meta.slug : 'Anineko'));
+    // Kökten çözüm: mount başarılı olması "oynatıyor" demek değil. Bozuk
+    // bölümlerde (429, takılı segment, decode hatası) video oynamaz ve eski
+    // akış Megavid'e geçmezdı çünkü mount her zaman true dönerdi. Artık video
+    // gerçekten oynayana kadar bekliyoruz; oynamazsa false → Megavid denenecek.
+    if(!(await waitForPlayback(episodeNum, 9000))){
+      if(currentEpisodeNum === episodeNum){
+        showPlayerToast((state.lang==='en' ? 'Otakuvid didn\'t play — switching to Megavid'
+          : (state.lang==='tr' ? 'Otakuvid oynatamadı — Megavid\'e geçiliyor'
+             : 'Otakuvid oynada bilmədi — Megavid\'ə keçilir')));
+      }
+      return false;
+    }
     return true;
   }
   return false;
+}
+
+// Yeni bölüme geçildiğinde iptal olur; video gerçekten ilerliyorsa true döner.
+// Böylece "mount oldu ama siyah/takılı kaldı" durumları da fallback tetikler.
+async function waitForPlayback(episodeNum, timeoutMs){
+  const deadline = Date.now() + timeoutMs;
+  return new Promise(resolve=>{
+    const check = ()=>{
+      if(currentEpisodeNum !== episodeNum) return resolve(false); // kullanıcı başka bölüme geçti
+      const vid = document.getElementById('mainVideoEl');
+      if(vid && !vid.paused && vid.currentTime > 0.4 && vid.readyState >= 2) return resolve(true);
+      if(Date.now() >= deadline) return resolve(false);
+      setTimeout(check, 400);
+    };
+    check();
+  });
 }
 
 // AniList id + idMal kullanarak Megavid'den m3u8 + softsub listesi alır.
@@ -2297,6 +2326,7 @@ async function loadMegavidSourceIfNeeded(frame, anime, episodeNum){
   // HLS.js Safari'de native çalışır, diğer tarayıcılarda hls.js kullanır.
   if(playUrl){
     removeVideoElements();
+    currentSourceLabel = 'megavid';
     if(window.Hls || vidCanNativeHls()){
       await mountHlsPlayer(frame, playUrl, subTracks);
     } else {
@@ -4200,6 +4230,7 @@ function mountWebTorrentPlayer(frame, url, subtitleUrl){
 }
 
 let currentEpisodeSourceUrl = null;
+let currentSourceLabel = null; // 'otakuvid' | 'megavid' — hangi kaynak mount edildi
 
 function showPlayerPlaceholder(){
   removeVideoElements();
@@ -4633,6 +4664,15 @@ function attachHlsErrorRecovery(hls, vid){
             playEpisode(currentEpisodeNum);
             return;
           }
+          // Otakuvid segmentleri hâlâ yüklenemiyorsa (429, bozuk bölüm) Otomatik
+          // Megavid'e geç — kullanıcıyı siyah/takılı ekranda bekletme.
+          if(currentSourceLabel === 'otakuvid' && currentEpisodeNum){
+            showPlayerToast((state.lang==='en' ? 'Otakuvid failed — switching to Megavid'
+              : (state.lang==='tr' ? 'Otakuvid başarısız — Megavid\'e geçiliyor'
+                 : 'Otakuvid uğursuz oldu — Megavid\'ə keçilir')));
+            loadMegavidSourceIfNeeded(document.getElementById('playerFrame'), currentDetail, currentEpisodeNum).then(()=>{});
+            return;
+          }
           showPlayerToast((state.lang==='en'?'Video couldn\'t load — try a different source':(state.lang==='tr'?'Video yüklenemedi — farklı bir kaynak dene':'Video yüklənə bilmədi — başqa mənbə sına')));
           showPlayerPlaceholder();
         }
@@ -4837,7 +4877,9 @@ function buildPlayerSettingsPanel(src){
     ];
     srcWrap.innerHTML = opts.map(o=>`
       <button class="option-pill ${pref===o.v?'active':''}" onclick="setSourcePref('${o.v}')">${o.label}</button>
-    `).join('');
+    `).join('')
+    + (pref !== 'megavid' ? `
+      <button class="option-pill ${state.directOtaku?'active':''}" style="${state.directOtaku?'border-color:var(--accent); color:var(--accent);':''}" onclick="toggleDirectOtaku()">${state.lang==='en'?'Direct':(state.lang==='tr'?'Direkt':'Direkt')}: ${state.directOtaku?'AÇIK':'KAPALI'}</button>` : '');
   }
 
   // Quality: HLS.js manifest'inden gelen seviyeler önceliklidir (otakuvid/megavid),
