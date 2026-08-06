@@ -4615,26 +4615,38 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
   }
   currentSubtitleTracks = tracks;
 
-  const addTracks = ()=>{
+  const addTracks = async ()=>{
     vid.querySelectorAll('track').forEach(t=>t.remove());
-    tracks.forEach((t,i)=>{
+    for(let i=0;i<tracks.length;i++){
+      const t = tracks[i];
       const track = document.createElement('track');
       track.kind = 'subtitles';
-      track.src = t.file;
       track.label = t.label || ('Track ' + (i+1));
+      track.srclang = t.srclang || 'en';
       track.default = (i === 0);
-      // Without this the browser refuses cross-origin VTT ("Unsafe attempt to
-      // load URL ... Domains must match"). Our proxy returns ACAO:* so CORS
-      // loads fine once the attribute is set.
-      track.crossOrigin = 'anonymous';
+      // <track> has no crossorigin attribute, so a cross-origin VTT is refused
+      // ("Unsafe attempt to load URL ... Domains must match"). Our proxy is
+      // CORS-enabled (ACAO:*), so fetch the VTT and hand the track a
+      // same-origin blob: URL — cues then load without the browser blocking it.
+      try{
+        const resp = await fetch(t.file);
+        if(resp.ok){
+          const text = await resp.text();
+          track.src = URL.createObjectURL(new Blob([text], { type: 'text/vtt' }));
+        } else {
+          track.src = t.file;
+        }
+      }catch(e){
+        track.src = t.file;
+      }
       vid.appendChild(track);
-    });
+    }
   };
 
   if(vid.canPlayType('application/vnd.apple.mpegurl')){
     // Safari/iOS play HLS natively — no library needed, and it's the fastest path there.
     vid.src = url;
-    addTracks();
+    await addTracks();
     attachPlayerBehaviors(vid, frame);
     buildPlayerSettingsPanel(null);
     return;
@@ -4670,8 +4682,13 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
     hlsInstance.loadSource(url);
     hlsInstance.attachMedia(vid);
     attachHlsErrorRecovery(hlsInstance, vid);
-    addTracks();
     attachPlayerBehaviors(vid, frame);
+    // Subtitles start hidden so the browser waits for the user to toggle them
+    // on — but switching requires the cues to be loaded, which is why blob
+    // tracks above matter. Keep default track visible to match prior behavior.
+    addTracks().then(()=>{
+      try{ for(let i=0;i<vid.textTracks.length;i++){ vid.textTracks[i].mode = (i===0) ? 'showing' : 'hidden'; } }catch(e){}
+    });
     buildPlayerSettingsPanel(null);
   }catch(e){
     console.error('[anivax] mountHlsPlayer failed:', e);
