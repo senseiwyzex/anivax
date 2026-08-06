@@ -651,7 +651,7 @@
   <div class="admin-tabs">
     <button class="admin-tab active" data-tab="dashboard" onclick="switchAdminTab('dashboard')" data-i18n="admin.tab.dashboard">Dashboard</button>
     <button class="admin-tab" data-tab="add" onclick="switchAdminTab('add')" data-i18n="admin.tab.add">Anime əlavə et</button>
-    <button class="admin-tab" data-tab="feed" onclick="switchAdminTab('feed')">Feed Senkron</button>
+    <button class="admin-tab" data-tab="feed" onclick="switchAdminTab('feed')" style="display:none;">Feed Senkron</button>
     <button class="admin-tab" data-tab="seasons" onclick="switchAdminTab('seasons')" data-i18n="admin.tab.seasons">Sezonlar</button>
     <button class="admin-tab" data-tab="categories" onclick="switchAdminTab('categories')" data-i18n="admin.tab.categories">Kateqoriyalar</button>
     <button class="admin-tab" data-tab="manage" onclick="switchAdminTab('manage')" data-i18n="admin.tab.manage">İdarəetmə</button>
@@ -678,34 +678,16 @@
     <div id="adminResults" style="padding:0 18px 18px; display:flex; flex-direction:column; gap:10px;"></div>
   </div>
 
-  <!-- TAB: Feed / RSS Sync -->
+  <!-- TAB: Feed / RSS Sync (torrent kaynağı kaldırıldı — Megavid otomatik akış kullanılıyor) -->
   <div id="adminTab-feed" class="admin-tab-panel hidden">
     <div class="settings-group" style="margin-top:16px;">
-      <div class="settings-label">Otomatik Feed / RSS Senkronizasyonu</div>
+      <div class="settings-label">Video Kaynağı</div>
       <div class="settings-card" style="padding:16px;">
         <div class="settings-row-sub" style="margin-bottom:12px; font-size:12.5px; color:var(--text-dim);">
-          <b>Varsayılan davranış:</b> İzleyici bir bölüme tıkladığında o bölümün kaynağı otomatik olarak feed'den aranıp arka planda çekilir (tüm sezon bir kerede çekilmez). Aşağıdaki hazır İngilizce-altyazılı şablonlardan birini seçip kaydetmen yeterli.
+          Bölümler otomatik olarak Megavid'den çözülüp m3u8 + softsub altyazı ile oynatılır. Ek yapılandırma gerekmez.
         </div>
-        <div style="margin-bottom:12px;">
-          <select id="feedPresetSelect" class="auth-input" style="width:100%; margin-bottom:10px;" onchange="applyFeedPreset(this.value)">
-            <option value="">— Hazır Şablon Seç —</option>
-            <option value="nyaa_en">Nyaa.si — İngilizce Altyazılı (önerilen)</option>
-            <option value="nyaa_all">Nyaa.si — Tümü</option>
-            <option value="animetosho">AnimeTosho API</option>
-            <option value="rsshub">RSSHub — Nyaa</option>
-          </select>
-          <input type="text" id="feedSourceUrlInput" placeholder="Önce hazır şablon seç veya feed URL gir..." class="auth-input" style="width:100%;">
-        </div>
-        <div style="display:flex; gap:10px;">
-          <button class="btn-primary" style="flex:1; padding:12px;" onclick="saveFeedConfig()">Feed Yapılandırmasını Kaydet</button>
-        </div>
-        <div style="display:flex; gap:10px; margin-top:8px;">
-          <button class="btn-ghost" style="flex:1; padding:10px; font-size:12px;" onclick="syncFeed()">Tümünü Şimdi Senkronizele (opsiyonel)</button>
-        </div>
-        <div id="feedSyncStatus" style="margin-top:12px; font-size:12.5px; font-weight:700; display:none;"></div>
       </div>
     </div>
-    <div id="feedSyncLog" style="padding:0 18px 18px; display:flex; flex-direction:column; gap:8px;"></div>
   </div>
 
   <!-- TAB: Season merging -->
@@ -4139,45 +4121,29 @@ function loadEpisodeIntoPlayer(episodeNum){
   teardownPlayer();
   currentEpisodeSourceUrl = null;
 
-  const torrentList = (src && Array.isArray(src.torrents)) ? src.torrents.filter(Boolean) : [];
   const hasVideo = !!(src && src.video);
 
-  if(!src || (!hasVideo && torrentList.length === 0)){
-    // KAYNAK YOK: önce mevcut torrent araması (feed) dene, bulunamazsa Megavid
-    // JSON API üzerinden otomatik m3u8 + softsub çöz; o da olmazsa iframe yedeği.
+  // KAYNAK YOK: Megavid JSON API üzerinden otomatik m3u8 + softsub çözülür.
+  // Bu ana akıştır; başarısız olursa iframe yedeği kullanılır.
+  if(!src || !hasVideo){
     showPlayerLoading(state.lang==='en' ? 'Searching for episode source...' : (state.lang==='tr' ? 'Bölüm kaynağı aranıyor...' : 'Bölüm üçün mənbə axtarılır...'));
-    lazyFetchEpisodeSource(episodeNum).then(found => {
-      if(found && currentEpisodeNum === episodeNum){
-        loadEpisodeIntoPlayer(episodeNum);
-      } else if(currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl')){
-        // Torrent kaynağı yok: Megavid otomatik çözümü devreye girsin.
-        loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
-          if(!didPlay && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl')){
-            showPlayerPlaceholder();
-          }
-        });
+    loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
+      if(!didPlay && currentEpisodeNum === episodeNum && !document.getElementById('mainVideoEl') && !document.getElementById('megavidIframe')){
+        mountMegavidIframe(frame, currentDetail, episodeNum);
       }
     });
     return;
   }
 
-  // TORRENT ÖNCELİĞİ: torrent kaynağı varsa her zaman önce torrent oynatılır.
-  // Eski video linki korunur, kullanıcı "Kaynak" seçiciden değiştirebilir.
-  if(torrentList.length > 0){
-    currentEpisodeSourceUrl = torrentList[0];
-    mountWebTorrentPlayer(frame, torrentList[0], src.subtitle);
+  // Admin manuel video linki varsa (youtube/hls/direct) o oynatılır.
+  const info = detectSourceType(src.video);
+  currentEpisodeSourceUrl = src.video;
+  if(info.type === 'youtube'){
+    mountYouTubePlayer(frame, info.id);
+  } else if(info.type === 'hls'){
+    mountHlsPlayer(frame, info.url, src.subtitle);
   } else {
-    const info = detectSourceType(src.video);
-    currentEpisodeSourceUrl = src.video;
-    if(info.type === 'youtube'){
-      mountYouTubePlayer(frame, info.id);
-    } else if(info.type === 'hls'){
-      mountHlsPlayer(frame, info.url, src.subtitle);
-    } else if(info.type === 'webtorrent'){
-      mountWebTorrentPlayer(frame, info.url, src.subtitle);
-    } else {
-      mountDirectPlayer(frame, info.url, src.subtitle);
-    }
+    mountDirectPlayer(frame, info.url, src.subtitle);
   }
 
   buildPlayerSettingsPanel(src);
@@ -4648,23 +4614,14 @@ function renderPlayerEpisodeList(){
 }
 
 function buildPlayerSettingsPanel(src){
-  // SOURCE: torrent kaynakları (önce) + eski video linki. Torrent önceliklidir.
+  // SOURCE: admin manuel video linki varsa gösterilir; Megavid otomatik akıştır.
   const srcWrap = document.getElementById('sourceOptions');
   const srcRow = document.getElementById('sourceRow');
-  const torrentList = (src && Array.isArray(src.torrents)) ? src.torrents.filter(Boolean) : [];
   const hasVideo = !!(src && src.video);
-  if(torrentList.length > 0 || hasVideo){
+  if(hasVideo){
     srcRow.classList.remove('hidden');
-    let html = '';
-    torrentList.forEach((turl, i)=>{
-      const active = turl === currentEpisodeSourceUrl;
-      html += `<button class="option-pill ${active?'active':''}" onclick="switchEpisodeSource('${turl.replace(/'/g,"\\'")}')">⚡ Torrent ${torrentList.length>1?(i+1):''}</button>`;
-    });
-    if(hasVideo){
-      const active = src.video === currentEpisodeSourceUrl;
-      html += `<button class="option-pill ${active?'active':''}" onclick="switchEpisodeSource('${src.video.replace(/'/g,"\\'")}')">${state.lang==='en'?'Video link':'Video link'}</button>`;
-    }
-    srcWrap.innerHTML = html;
+    const active = src.video === currentEpisodeSourceUrl;
+    srcWrap.innerHTML = `<button class="option-pill ${active?'active':''}" onclick="switchEpisodeSource('${src.video.replace(/'/g,"\\'")}')">${state.lang==='en'?'Video link':'Video link'}</button>`;
   } else {
     srcRow.classList.add('hidden');
   }
@@ -4735,9 +4692,7 @@ function switchEpisodeSource(url){
   currentEpisodeSourceUrl = url;
   teardownPlayer();
 
-  if(info.type === 'webtorrent'){
-    mountWebTorrentPlayer(frame, info.url, src ? src.subtitle : null);
-  } else if(info.type === 'youtube'){
+  if(info.type === 'youtube'){
     mountYouTubePlayer(frame, info.id);
   } else if(info.type === 'hls'){
     mountHlsPlayer(frame, info.url, src ? src.subtitle : null);
@@ -4745,7 +4700,7 @@ function switchEpisodeSource(url){
     mountDirectPlayer(frame, info.url, src ? src.subtitle : null);
   }
 
-  if(info.type !== 'webtorrent' && savedTime > 0){
+  if(savedTime > 0){
     const nv = document.getElementById('mainVideoEl');
     if(nv){
       nv.addEventListener('loadedmetadata', ()=>{ try{ nv.currentTime = savedTime; }catch(e){} }, {once:true});
