@@ -4643,8 +4643,10 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
     }
   };
 
-  if(vid.canPlayType('application/vnd.apple.mpegurl')){
+  if(vid.canPlayType('application/vnd.apple.mpegurl') === 'probably'){
     // Safari/iOS play HLS natively — no library needed, and it's the fastest path there.
+    // (Chromium/Firefox return '' or 'maybe' — 'maybe' means MSE, not native
+    // playback, so only Safari's 'probably' gets the native branch.)
     vid.src = url;
     await addTracks();
     attachPlayerBehaviors(vid, frame);
