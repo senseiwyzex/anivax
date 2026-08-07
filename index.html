@@ -1137,7 +1137,8 @@ let state = {
   userRatings: {},   // { animeId: 1-10 }
   communityRatings: {}, // { animeId: {avg, count} } — aggregated from all users
   episodeProgress: {},  // { "animeId:episode": true }
-  brokenSources: {},   // { "animeId:episode": true } — otakuvid başarısız oldu, bir sonraki açılışta Megavid dene
+  brokenSources: {},   // { "animeId:episode": true } — otakuvid fatal hata verdi, bir sonraki açılışta Megavid dene
+  megavidMissing: {},  // { "animeId:episode": timestamp } — Megavid'de bölüm yok (1 saat TTL)
   feedConfig: null,     // { provider:'nyaa-en', url:'...' } — admin feed kaynağı
   sourcePref: 'auto'    // 'auto' | 'anineko' | 'megavid' — bölüm kaynak önceliği
   ,directOtaku: false   // Otakuvid Direkt Mod: segment'ler doğrudan CDN'den (0 worker isteği)
@@ -1386,6 +1387,16 @@ async function loadState(){
     state = {...state, ...saved};
   }catch(e){}
 
+  // v2: eski sürüm yavaş-ama-çalışan bölümleri de "bozuk" işaretliyordu; artık
+  // yalnızca fatal hata işaretleniyor. Eski kayıtları tek seferde temizle.
+  try{
+    if(localStorage.getItem('anivax_broken_v') !== '2'){
+      state.brokenSources = {};
+      state.megavidMissing = {};
+      localStorage.setItem('anivax_broken_v', '2');
+    }
+  }catch(e){}
+
   // 1) Anında render: yerel önbellekten kütüphane gelirse home hemen çizilir,
   //    ağ yanıtı beklenmez (eski davranış: 6 seri fetch bitene kadar boş ekran).
   let renderedFromCache = false;
@@ -1478,7 +1489,8 @@ function saveSettings(){
     lang: state.lang, theme: state.theme, autoplay: state.autoplay, skipIntro: state.skipIntro,
     feedConfig: state.feedConfig || null, sourcePref: state.sourcePref || 'auto',
     directOtaku: state.directOtaku || false,
-    brokenSources: state.brokenSources || {}
+    brokenSources: state.brokenSources || {},
+    megavidMissing: state.megavidMissing || {}
   })); }catch(e){}
 }
 
@@ -2214,6 +2226,14 @@ const ANINEKO_SOURCE_PATH = '/anineko-source';
 let currentMegavidUrl = null;      // resolved m3u8 for the active episode
 let megavidSubtitleUrl = null;     // .vtt track routed through the worker
 
+// Megavid'de bölüm yoksa 1 saat boyunca tekrar sorma (kara delik iframe'i önler).
+const MEGAVID_MISSING_TTL = 60 * 60 * 1000;
+// Oynatma durum izleyicisi: fatal HLS hatası olduğunda watchdog beklemesi sonlanır
+// (fallback'i attachHlsErrorRecovery zaten yönetir). Her yeni mount'ta sıfırlanır.
+let playbackActivity = { last: 0, fatal: false };
+// Son Megavid denemesinin sonucu: 'ok' | 'missing' | 'transient' — zincir kararında kullanılır.
+let megavidLastStatus = 'ok';
+
 // AniList başlıklarını (en→tr→romaji sırası) kullanarak Anineko'dan m3u8 +
 // softsub listesi alır. Tek istek: worker aramayı ve embed çözmeyi kendisi yapar.
 async function aninekoResolveSource(anime, episodeNum){
@@ -2235,8 +2255,12 @@ async function aninekoResolveSource(anime, episodeNum){
 // Anineko/otakuvid akışı: m3u8 ve segmentleri worker /proxy'den geçiririz çünkü
 // dramiyos/.cfd CDN'i token'ı IP'ye kilitler ve CORS'u sadece otakuvid.online'a
 // açar. Worker bu yüzden hem playlist'i rewrite eder hem de segmentleri çeker.
-async function loadAninekoSourceIfNeeded(frame, anime, episodeNum){
-  // Daha önce bu bölümde otakuvid başarısız olduysa bu sefer otakuvidi atla,
+// megavidInfo (opsiyonel, promise de olabilir): paralel ön-kontrolde çözülen
+// Megavid varlığı { available, missing }. Megavid bu bölümde YOKSA otakuvid tek
+// şans → yavaş CDN host'ları (segment 30s+) için uzun sabırla beklenir. Megavid
+// VARSA otakuvid kısa sürede başlamazsa hızlıca Megavid'e geçilir.
+async function loadAninekoSourceIfNeeded(frame, anime, episodeNum, megavidInfo){
+  // Daha önce bu bölümde otakuvid fatal hata verdiyse otakuvidi atla,
   // zincir doğrudan Megavid'i denesin.
   if(isSourceBroken(anime && anime.id, episodeNum)){
     if(currentEpisodeNum === episodeNum){
@@ -2267,40 +2291,86 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum){
       if(window.Hls) await mountHlsPlayer(frame, playUrl, subTracks);
       else return false;
     }
+    if(!document.getElementById('mainVideoEl')) return false; // mount başarısız oldu
     showPlayerToast('Otakuvid • ' + (data.meta && data.meta.slug ? data.meta.slug : 'Anineko'));
-    // Kökten çözüm: mount başarılı olması "oynatıyor" demek değil. Bozuk
-    // bölümlerde (429, takılı segment, decode hatası) video oynamaz ve eski
-    // akış Megavid'e geçmezdı çünkü mount her zaman true dönerdi. Artık video
-    // gerçekten oynayana kadar bekliyoruz; oynamazsa false → Megavid denenecek.
-    if(!(await waitForPlayback(episodeNum, 9000))){
-      if(currentEpisodeNum === episodeNum){
-        markSourceBroken(anime && anime.id, episodeNum);
-        showPlayerToast((state.lang==='en' ? 'Otakuvid didn\'t play — switching to Megavid'
-          : (state.lang==='tr' ? 'Otakuvid oynatamadı — Megavid\'e geçiliyor'
-             : 'Otakuvid oynada bilmədi — Megavid\'ə keçilir')));
-      }
+
+    // Megavid varlığını mount sırasında paralel çözülmüş promise'den al.
+    const mInfo = megavidInfo ? await Promise.resolve(megavidInfo) : null;
+    const megavidAvailable = !!(mInfo && mInfo.available);
+    const slowOnly = !megavidAvailable; // Megavid bu bölümde yok → otakuvid tek şans
+
+    if(slowOnly){
+      showPlayerOverlay(state.lang==='en' ? 'Loading — source may be slow'
+        : (state.lang==='tr' ? 'Yükleniyor — kaynak yavaş olabilir'
+           : 'Yüklənir — mənbə yavaş ola bilər'));
+    }
+    const result = await waitForPlayback(episodeNum, {
+      timeoutMs: slowOnly ? 50000 : 12000
+    });
+    hidePlayerOverlay();
+
+    if(result === 'ok'){
+      clearSourceBroken(anime && anime.id, episodeNum);
+      return true;
+    }
+    if(result === 'cancelled' || result === 'fatal'){
+      // fatal → attachHlsErrorRecovery Megavid fallback'ini zaten tetikledi.
       return false;
     }
-    clearSourceBroken(anime && anime.id, episodeNum);
-    return true;
+    // stalled: otakuvid hiç oynatamadı.
+    if(slowOnly){
+      // Megavid de yok → üst akış hata panelini kursun.
+      return false;
+    }
+    if(currentEpisodeNum === episodeNum && megavidAvailable){
+      // Otakuvid yavaş/çalışmadı ama Megavid var → bir dahaki sefere Megavid'e
+      // doğrudan gitmek için hatırla (Megavid sonradan kaybolursa otomatik temizlenir).
+      markSourceBroken(anime && anime.id, episodeNum);
+      showPlayerToast((state.lang==='en' ? 'Otakuvid slow — switching to Megavid'
+        : (state.lang==='tr' ? 'Otakuvid yavaş — Megavid\'e geçiliyor'
+           : 'Otakuvid yavaşdır — Megavid\'ə keçilir')));
+    }
+    return false;
   }
   return false;
 }
 
-// Yeni bölüme geçildiğinde iptal olur; video gerçekten ilerliyorsa true döner.
-// Böylece "mount oldu ama siyah/takılı kaldı" durumları da fallback tetikler.
-async function waitForPlayback(episodeNum, timeoutMs){
-  const deadline = Date.now() + timeoutMs;
-  return new Promise(resolve=>{
-    const check = ()=>{
-      if(currentEpisodeNum !== episodeNum) return resolve(false); // kullanıcı başka bölüme geçti
-      const vid = document.getElementById('mainVideoEl');
-      if(vid && !vid.paused && vid.currentTime > 0.4 && vid.readyState >= 2) return resolve(true);
-      if(Date.now() >= deadline) return resolve(false);
-      setTimeout(check, 400);
-    };
-    check();
-  });
+// Video kare üretiyor mu? Siyah ekran vakasında currentTime/sarı bar ilerler ama
+// decoder hiç kare üretmez (totalVideoFrames hep 0 kalır). API yoksa -1 döner →
+// bu durumda zaman-tabanlı kontrol kullanılır (eski davranış).
+function videoFramesRendered(vid){
+  try{
+    if(typeof vid.getVideoPlaybackQuality !== 'function') return -1;
+    return vid.getVideoPlaybackQuality().totalVideoFrames || 0;
+  }catch(e){ return -1; }
+}
+
+// Yeni bölüme geçildiğinde iptal olur; video gerçekten oynuyorsa 'ok' döner.
+// 'stalled' = oynamadı veya süre ilerlediği halde siyah kaldı (zaman aşımı),
+// 'fatal' = HLS fatal hata (fallback zaten tetiklendi, burada sadece bekleme durdurulur).
+async function waitForPlayback(episodeNum, opts){
+  opts = opts || {};
+  const timeoutMs = opts.timeoutMs || 12000;
+  const start = Date.now();
+  let baseFrames = -1;
+  let frameGateStart = 0;
+  while(true){
+    if(currentEpisodeNum !== episodeNum) return 'cancelled';
+    if(playbackActivity.fatal) return 'fatal';
+    const vid = document.getElementById('mainVideoEl');
+    if(vid && !vid.paused && vid.currentTime > 0.4 && vid.readyState >= 2){
+      const frames = videoFramesRendered(vid);
+      if(frames < 0) return 'ok'; // API yok → zaman ilerliyorsa yeterli
+      if(baseFrames < 0){ baseFrames = frames; frameGateStart = Date.now(); }
+      if(frames > baseFrames) return 'ok'; // yeni kare üretildi → gerçekten oynuyor
+      // Zaman 5s+ ilerledi ama tek yeni kare bile üretilmedi → siyah ekran → fallback.
+      if(vid.currentTime > 5 && (Date.now() - frameGateStart) > 2500) return 'stalled';
+      await new Promise(r=>setTimeout(r, 400));
+      continue;
+    }
+    if(Date.now() - start > timeoutMs) return 'stalled';
+    await new Promise(r=>setTimeout(r, 400));
+  }
 }
 
 // Otakuvid bu bölümde başarısız olduysa hatırla → bir sonraki açılışta otakuvidi
@@ -2327,24 +2397,60 @@ function isSourceBroken(animeId, episodeNum){
 }
 
 // AniList id + idMal kullanarak Megavid'den m3u8 + softsub listesi alır.
+// Dönüş: { data, missing } — data: kaynak bulundu; missing: her iki id uzayında
+// da "bölüm yok" yanıtı geldi (geçici ağ/worker hatası değil, gerçek eksiklik).
 async function megavidResolveSource(anime, episodeNum){
   const idMal = anime.idMal || null;
   const idAni = anime.id;
-  if(!idAni && !idMal) return null;
+  if(!idAni && !idMal) return { data: null, missing: false };
 
   const attempts = [];
   if(idMal) attempts.push(`idType=mal&id=${encodeURIComponent(idMal)}`);
   if(idAni) attempts.push(`idType=ani&id=${encodeURIComponent(idAni)}`);
 
+  let notFound = 0;
   for(const qs of attempts){
     const url = `${MEGAVID_WORKER_BASE}/source?${qs}&ep=${episodeNum}&lang=sub`;
     try{
       const res = await fetch(url);
       const data = await res.json().catch(()=>null);
-      if(res.ok && data && data.status === 'ok' && data.source) return data;
+      if(res.ok && data && data.status === 'ok' && data.source) return { data, missing: false };
+      if(res.ok && data && data.status === 'error' && /couldn't find|not exist|removed|unavailable yet/i.test(data.message || '')) notFound++;
     }catch(e){ /* try next id namespace */ }
   }
-  return null;
+  return { data: null, missing: attempts.length > 0 && notFound === attempts.length };
+}
+
+// Megavid varlığı ön-kontrolü: kısa TTL'li "yok" önbelleği → tekrar tekrar
+// boşuna Megavid denenmez ve kara delik iframe'i hiç kurulmaz.
+function megavidMissingKey(anime, episodeNum){
+  return (anime && anime.id != null ? anime.id : 'a') + ':' + episodeNum;
+}
+function megavidCachedMissing(anime, episodeNum){
+  const ts = state.megavidMissing && state.megavidMissing[megavidMissingKey(anime, episodeNum)];
+  return !!(ts && (Date.now() - ts) < MEGAVID_MISSING_TTL);
+}
+function megavidCacheMissing(anime, episodeNum){
+  state.megavidMissing = state.megavidMissing || {};
+  const k = megavidMissingKey(anime, episodeNum);
+  state.megavidMissing[k] = Date.now();
+  const keys = Object.keys(state.megavidMissing);
+  if(keys.length > 300){
+    keys.sort((a,b)=>state.megavidMissing[a]-state.megavidMissing[b]);
+    for(let i=0;i<keys.length-300;i++) delete state.megavidMissing[keys[i]];
+  }
+  saveSettings();
+}
+// Megavid bu bölümde var mı? Sonuç: { available, missing, data }
+async function megavidAvailability(anime, episodeNum){
+  if(megavidCachedMissing(anime, episodeNum)) return { available: false, missing: true, data: null };
+  const { data, missing } = await megavidResolveSource(anime, episodeNum);
+  if(missing){
+    megavidCacheMissing(anime, episodeNum);
+    return { available: false, missing: true, data: null };
+  }
+  if(data) return { available: true, missing: false, data };
+  return { available: false, missing: false, data: null }; // geçici hata — sonra tekrar dene
 }
 
 // m3u8 ve .vtt dosyalarını Worker /proxy üzerinden geçirerek oynatılabilir
@@ -2384,10 +2490,12 @@ function mountMegavidIframe(frame, anime, episodeNum){
 
 // Ana akış: mevcut kaynak yoksa / torrent çözülemezse Megavid'i otomatik dene.
 // Başarılı olursa kendi player'ımız (HLS.js) + softsub ile oynatır.
-// Çift fallback race'i: attachHlsErrorRecovery ile waitForPlayback ikisi de
-// Megavid'i çağırabilir — aynı promise'i paylaşarak çift mount'u önleriz.
+// Çift fallback race'i: attachHlsErrorRecovery ile üst akış ikisi de burayı
+// çağırabilir — aynı promise'i paylaşarak çift mount'u önleriz.
+// Megavid'de bölüm YOKSA (missing) kara delik iframe'i kurulmaz ve otakuvid'in
+// "bozuk" işareti geri alınır (bozukluk Megavid'in eksikliğinden de kaynaklanabilir).
 let megavidLoadPromise = null;
-function loadMegavidSourceIfNeeded(frame, anime, episodeNum){
+function loadMegavidSourceIfNeeded(frame, anime, episodeNum, known){
   if(megavidLoadPromise) return megavidLoadPromise;
   megavidLoadPromise = (async ()=>{
     const src = anime && anime.episodeSources ? anime.episodeSources[episodeNum] : null;
@@ -2397,8 +2505,20 @@ function loadMegavidSourceIfNeeded(frame, anime, episodeNum){
     // Mevcut oynatılabilir kaynak varsa karışma.
     if(hasTorrent || hasVideo) return false;
 
-    const data = await megavidResolveSource(anime, episodeNum);
-    if(!data) return false;
+    const info = known || await megavidAvailability(anime, episodeNum);
+    if(!info || !info.available){
+      if(info && info.missing){
+        // Bölüm gerçekten Megavid'de yok → iframe kara deliğine düşme.
+        megavidLastStatus = 'missing';
+        clearSourceBroken(anime && anime.id, episodeNum);
+        return false;
+      }
+      megavidLastStatus = 'transient'; // geçici hata — iframe yedeği üst akışta denenecek
+      return false;
+    }
+    megavidLastStatus = 'ok';
+    const data = info.data;
+    if(!data || !data.source) return false;
     if(currentEpisodeNum !== episodeNum) return false;
 
     currentMegavidUrl = data.source;
@@ -2419,9 +2539,15 @@ function loadMegavidSourceIfNeeded(frame, anime, episodeNum){
       } else {
         await ensureHlsJs();
         if(window.Hls) await mountHlsPlayer(frame, playUrl, subTracks);
-        else mountMegavidIframe(frame, anime, episodeNum);
+        else { mountMegavidIframe(frame, anime, episodeNum); return true; }
       }
-      return true;
+      // Megavid de oynatamazsa kara delik bırakmak yerine üst akış karar versin
+      // (hata paneli veya iframe yedeği).
+      const r = await waitForPlayback(episodeNum, { timeoutMs: 20000 });
+      if(r === 'ok') return true;
+      if(r === 'fatal'){ megavidLastStatus = 'transient'; return false; }
+      megavidLastStatus = 'transient';
+      return false;
     }
     return false;
   })().finally(()=>{ megavidLoadPromise = null; });
@@ -4352,6 +4478,60 @@ function showPlayerLoading(msg){
   frame.appendChild(ph);
 }
 
+// Son çare hata paneli: her iki kaynak da yoksa/çalışamıyorsa kara delik iframe
+// yerine anlaşılır mesaj + "Tekrar Dene" + "Megavid player'da dene" sunar.
+function showPlayerUnavailable(){
+  removeVideoElements();
+  const frame = document.getElementById('playerFrame');
+  const ph = document.createElement('div');
+  ph.id = 'playerPlaceholder';
+  ph.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;width:100%;height:100%;padding:20px;text-align:center;';
+  const t1 = state.lang==='en' ? 'No playable source for this episode'
+    : (state.lang==='tr' ? 'Bu bölüm için oynatılabilir kaynak bulunamadı'
+       : 'Bu bölüm üçün oynadıla bilən mənbə tapılmadı');
+  const t2 = state.lang==='en' ? 'Both sources failed or this episode is not available yet.'
+    : (state.lang==='tr' ? 'Her iki kaynak da başarısız oldu veya bu bölüm henüz yayında değil.'
+       : 'Hər iki mənbə uğursuz oldu və ya bu bölüm hələ yayında deyil.');
+  const retry = state.lang==='en' ? 'Retry' : (state.lang==='tr' ? 'Tekrar Dene' : 'Yenidən Cəhd');
+  const tryMegavid = state.lang==='en' ? 'Open in Megavid player'
+    : (state.lang==='tr' ? 'Megavid player\'da dene' : 'Megavid player-da sına');
+  ph.innerHTML = `<svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#E05252" stroke-width="1.6"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>` +
+    `<div class="ph-text" style="font-size:13px;color:#E8B84B;">${t1}</div>` +
+    `<div class="ph-text" style="font-size:12px;color:#8B8F9C;">${t2}</div>` +
+    `<div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;justify-content:center;">` +
+    `<button onclick="playEpisode(${currentEpisodeNum})" style="background:var(--accent);color:#1a1a1a;border:0;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;">${retry}</button>` +
+    `<button onclick="mountMegavidIframe(document.getElementById('playerFrame'), currentDetail, currentEpisodeNum)" style="background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:9px;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;">${tryMegavid}</button>` +
+    `</div>`;
+  frame.appendChild(ph);
+}
+
+// Video montajının ÜZERİNDE görünen "yavaş kaynak" göstergesi: siyah ekran yerine
+// kullanıcıya geçen süreyi gösterir; oynatma başlayınca kaldırılır.
+let playerOverlayTimer = null;
+function showPlayerOverlay(baseMsg){
+  hidePlayerOverlay();
+  const frame = document.getElementById('playerFrame');
+  if(!frame) return;
+  const ov = document.createElement('div');
+  ov.id = 'playerLoadingOverlay';
+  ov.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(0,0,0,0.55);z-index:20;pointer-events:none;';
+  const t0 = Date.now();
+  const render = ()=>{
+    const secs = Math.floor((Date.now()-t0)/1000);
+    ov.innerHTML = `<div class="spinner" style="width:28px;height:28px;border-width:3px;"></div>` +
+      `<div class="ph-text" style="font-size:13px;color:#fff;">${baseMsg}</div>` +
+      `<div class="ph-text" style="font-size:12px;color:#8B8F9C;">${secs}s</div>`;
+  };
+  render();
+  playerOverlayTimer = setInterval(render, 1000);
+  frame.appendChild(ov);
+}
+function hidePlayerOverlay(){
+  if(playerOverlayTimer){ clearInterval(playerOverlayTimer); playerOverlayTimer = null; }
+  const el = document.getElementById('playerLoadingOverlay');
+  if(el) el.remove();
+}
+
 function loadEpisodeIntoPlayer(episodeNum){
   const frame = document.getElementById('playerFrame');
   const src = currentDetail && currentDetail.episodeSources ? currentDetail.episodeSources[episodeNum] : null;
@@ -4360,32 +4540,38 @@ function loadEpisodeIntoPlayer(episodeNum){
   currentEpisodeSourceUrl = null;
 
   const hasVideo = !!(src && src.video);
+  megavidLastStatus = 'ok';
 
   // KAYNAK YOK: Varsayılan olarak Anineko (1-2 istek/bölüm, CORS açık), sonra
   // Megavid (~325 istek/bölüm, proxy gerekli) otomatik çözülür. Kullanıcı
   // settings panelinden sourcePref ile sırayı Otakuvid/Megavid lehine
-  // zorlayabilir. İkisi de olmazsa iframe yedeği kullanılır.
+  // zorlayabilir. Megavid'de bölüm YOKSA kara delik iframe'i yerine net bir hata
+  // paneli gösterilir. Otakuvid yavaş CDN'den geç açılıyorsa (megavid de yoksa)
+  // sabredilir — bölüm sonunda oynar.
   if(!src || !hasVideo){
     showPlayerLoading(state.lang==='en' ? 'Searching for episode source...' : (state.lang==='tr' ? 'Bölüm kaynağı aranıyor...' : 'Bölüm üçün mənbə axtarılır...'));
     const pref = state.sourcePref || 'auto';
     if(pref === 'megavid'){
       loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
         if(!didPlay && currentEpisodeNum === episodeNum){
-          loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum).then(didAnineko => {
-            // Bozuk otakuvid mount'u DOM'da kalsa bile iframe yedeği kurulur
-            // (mountMegavidIframe kendisi temizler).
+          loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, { available: false, missing: megavidLastStatus === 'missing' }).then(didAnineko => {
             if(!didAnineko && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
-              mountMegavidIframe(frame, currentDetail, episodeNum);
+              if(megavidLastStatus === 'missing') showPlayerUnavailable();
+              else mountMegavidIframe(frame, currentDetail, episodeNum);
             }
           });
         }
       });
     } else {
-      loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
+      // Megavid varlığını otakuvid çözümlemesiyle PARALEL öğren → yavaş otakuvid'de
+      // karar (sabret vs Megavid'e geç) saniyeler içinde verilir.
+      const megavidInfoP = megavidAvailability(currentDetail, episodeNum).catch(()=>({ available:false, missing:false, data:null }));
+      loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, megavidInfoP).then(didPlay => {
         if(!didPlay && currentEpisodeNum === episodeNum){
           loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
             if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
-              mountMegavidIframe(frame, currentDetail, episodeNum);
+              if(megavidLastStatus === 'missing') showPlayerUnavailable();
+              else mountMegavidIframe(frame, currentDetail, episodeNum);
             }
           });
         }
@@ -4433,10 +4619,11 @@ function removeVideoElements(){
     try{ mega.src = 'about:blank'; }catch(e){} // stops Megavid iframe playback
   }
 
-  ['mainVideoEl','ytPlayerFrame','customControlBar','playerPlaceholder','skipIntroBtn','megavidIframe'].forEach(id=>{
+  ['mainVideoEl','ytPlayerFrame','customControlBar','playerPlaceholder','skipIntroBtn','megavidIframe','playerLoadingOverlay'].forEach(id=>{
     const el = document.getElementById(id);
     if(el) el.remove();
   });
+  if(playerOverlayTimer){ clearInterval(playerOverlayTimer); playerOverlayTimer = null; }
   // Also remove any leftover elements that aren't the settings panel.
   const frame = document.getElementById('playerFrame');
   if(frame){
@@ -4749,6 +4936,7 @@ function attachHlsErrorRecovery(hls, vid){
   hls.on(Hls.Events.ERROR, (event, data)=>{
     if(!data.fatal) return; // non-fatal errors are normal and self-heal
     console.warn('[anivax] HLS fatal error:', data.type, data.details, data.frag && data.frag.url);
+    playbackActivity.fatal = true; // watchdog beklemesini sonlandır
     // Ortak son-çare: otakuvid bu bölümde gerçekten oynatamıyorsa Megavid'e geç.
     const fallbackToMegavid = ()=>{
       if(currentSourceLabel === 'otakuvid' && currentEpisodeNum && currentDetail){
@@ -4802,10 +4990,11 @@ function attachHlsErrorRecovery(hls, vid){
         break;
     }
   });
-  vid.addEventListener('playing', ()=>{ networkRetries = 0; mediaRecoveries = 0; }); // reset once playback is healthy again
+  vid.addEventListener('playing', ()=>{ networkRetries = 0; mediaRecoveries = 0; playbackActivity.fatal = false; }); // reset once playback is healthy again
 }
 
 async function mountHlsPlayer(frame, url, subtitleTracks){
+  playbackActivity = { last: Date.now(), fatal: false }; // yeni mount → temiz durum
   const vid = document.createElement('video');
   vid.id = 'mainVideoEl';
   vid.controls = false;
