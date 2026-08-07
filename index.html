@@ -2393,6 +2393,57 @@ let playbackActivity = { last: 0, fatal: false };
 // Son Megavid denemesinin sonucu: 'ok' | 'missing' | 'transient' — zincir kararında kullanılır.
 let megavidLastStatus = 'ok';
 
+// Anineko ailesi kaynakları: worker artık tek embed yerine watch sayfasındaki
+// üç aileyi birden (bibiemb / otakuhg / otakuvid) paralel çözüp `sources[]`
+// döndürüyor. Ön uç bunları sırayla dener — biri oynatamazsa sıradakine geçer,
+// hepsi başarısız olursa Megavid'e düşer.
+let currentAninekoCandidates = [];   // [{key,name,source,index}, ...]
+let currentAninekoIndex = 0;         // aktif adayın indeksi
+let currentAninekoSubTracks = [];    // proxy'lenmiş altyazı track'leri
+let aninekoSwitchInProgress = false; // kaynak geçişi devam ediyor mu (çift mount koruması)
+
+function isAninekoSourceLabel(label){
+  return label === 'otakuvid' || label === 'bibiemb' || label === 'otakuhg';
+}
+
+// currentAninekoCandidates[i]'yi kurar ve mount eder. Geri: mount başarılı mı.
+async function mountAninekoCandidate(i, frame){
+  aninekoSwitchInProgress = false;
+  const cand = currentAninekoCandidates[i];
+  if(!cand || !cand.source) return false;
+  currentAninekoIndex = i;
+  currentSourceLabel = cand.key || 'otakuvid';
+  const playUrl = megavidProxyUrl(cand.source, 'https://otakuvid.online/');
+  if(!playUrl) return false;
+  removeVideoElements();
+  if(window.Hls || vidCanNativeHls()){
+    await mountHlsPlayer(frame, playUrl, currentAninekoSubTracks);
+  } else {
+    await ensureHlsJs();
+    if(window.Hls) await mountHlsPlayer(frame, playUrl, currentAninekoSubTracks);
+    else return false;
+  }
+  if(!document.getElementById('mainVideoEl')) return false;
+  showPlayerToast('Sunucu ' + (i+1) + ' • ' + (cand.name || 'Anineko'));
+  return true;
+}
+
+// Kullanıcı settings panelinden belirli bir Anineko kaynağını elle seçer.
+// Kaldığı yerden devam etmek için mevcut süre korunur.
+function switchAninekoSource(index){
+  if(aninekoSwitchInProgress || index === currentAninekoIndex) return;
+  const frame = document.getElementById('playerFrame');
+  const vid = document.getElementById('mainVideoEl');
+  const savedTime = vid && isFinite(vid.currentTime) && vid.currentTime > 0 ? vid.currentTime : 0;
+  aninekoSwitchInProgress = true;
+  mountAninekoCandidate(index, frame).then(()=>{
+    if(savedTime > 0){
+      const nv = document.getElementById('mainVideoEl');
+      if(nv) nv.addEventListener('loadedmetadata', ()=>{ try{ nv.currentTime = savedTime; }catch(e){} }, {once:true});
+    }
+  }).finally(()=>{ aninekoSwitchInProgress = false; });
+}
+
 // AniList başlıklarını (en→tr→romaji sırası) kullanarak Anineko'dan m3u8 +
 // softsub listesi alır. Tek istek: worker aramayı ve embed çözmeyi kendisi yapar.
 async function aninekoResolveSource(anime, episodeNum){
@@ -2436,56 +2487,73 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum, megavidInfo){
   if(!data) return false;
   if(currentEpisodeNum !== episodeNum) return false;
 
+  // Worker `sources[]` döndürüyorsa aday listesi ondan gelir (bibiemb/otakuhg/
+  // otakuvid sırası); eski yanıtlar için tek aday `data.source`'tur.
   const referer = 'https://otakuvid.online/';
-  const playUrl = megavidProxyUrl(data.source, referer);
-  const subTracks = (Array.isArray(data.tracks) ? data.tracks : []).map(t => ({
+  currentAninekoCandidates = (Array.isArray(data.sources) && data.sources.length)
+    ? data.sources.map((s, i) => ({ key: s.key || ('aneko' + i), name: s.name || s.key, source: s.source, index: i }))
+    : [{ key: 'otakuvid', name: 'Otakuvid', source: data.source, index: 0 }];
+  currentAninekoIndex = 0;
+  currentAninekoSubTracks = (Array.isArray(data.tracks) ? data.tracks : []).map(t => ({
     file: megavidProxyUrl(t.file, referer),
     label: t.label || 'English'
   }));
 
-  if(playUrl){
-    removeVideoElements();
-    currentSourceLabel = 'otakuvid';
-    if(window.Hls || vidCanNativeHls()){
-      await mountHlsPlayer(frame, playUrl, subTracks);
-    } else {
-      await ensureHlsJs();
-      if(window.Hls) await mountHlsPlayer(frame, playUrl, subTracks);
-      else return false;
-    }
-    if(!document.getElementById('mainVideoEl')) return false; // mount başarısız oldu
-    showPlayerToast('Sunucu 1 • ' + (data.meta && data.meta.slug ? data.meta.slug : 'Anineko'));
+  // Megavid varlığını mount sırasında paralel çözülmüş promise'den al.
+  const mInfo = megavidInfo ? await Promise.resolve(megavidInfo) : null;
+  const megavidAvailable = !!(mInfo && mInfo.available);
+  const slowOnly = !megavidAvailable; // Megavid bu bölümde yok → anineko tek şans
 
-    // Megavid varlığını mount sırasında paralel çözülmüş promise'den al.
-    const mInfo = megavidInfo ? await Promise.resolve(megavidInfo) : null;
-    const megavidAvailable = !!(mInfo && mInfo.available);
-    const slowOnly = !megavidAvailable; // Megavid bu bölümde yok → otakuvid tek şans
+  // Adayları sırayla dene: biri oynatırsa bitir, sıkışırsa (stalled) sıradakine
+  // geç. Fatal hata durumunda attachHlsErrorRecovery sıradaki adaya geçmeyi
+  // dener; o da başaramazsa üst akış Megavid'i devreye sokar.
+  for(let i = 0; i < currentAninekoCandidates.length; i++){
+    if(currentEpisodeNum !== episodeNum) return false;
+    const ok = await mountAninekoCandidate(i, frame);
+    if(!ok) continue;
 
+    // Megavid yoksa "tek şans" adaydır: ara adaylar hızlıca elensin, uzun sabır
+    // (50s) yalnızca SON adaya verilir — o başarısız olursa zaten kaynak kalmaz.
+    const timeoutMs = (slowOnly && i === currentAninekoCandidates.length - 1) ? 50000 : 12000;
     if(slowOnly){
       showPlayerOverlay(state.lang==='en' ? 'Loading — source may be slow'
         : (state.lang==='tr' ? 'Yükleniyor — kaynak yavaş olabilir'
            : 'Yüklənir — mənbə yavaş ola bilər'));
     }
-    const result = await waitForPlayback(episodeNum, {
-      timeoutMs: slowOnly ? 50000 : 12000
-    });
+    const result = await waitForPlayback(episodeNum, { timeoutMs });
     hidePlayerOverlay();
 
     if(result === 'ok'){
       clearSourceBroken(anime && anime.id, episodeNum);
       return true;
     }
-    if(result === 'cancelled' || result === 'fatal'){
-      // fatal → attachHlsErrorRecovery Megavid fallback'ini zaten tetikledi.
+    if(result === 'cancelled') return false;
+    if(result === 'fatal'){
+      // fatal → attachHlsErrorRecovery karar verdi: sıradaki aday varsa megavid'e
+      // GEÇMEDİ (döngü devam etsin), yoksa Megavid fallback'ini zaten tetikledi.
+      // Megavid yükleniyorsa (megavidLoadPromise dolu) burada döngüyü bitir.
+      if(i < currentAninekoCandidates.length - 1 && !megavidLoadPromise){
+        showPlayerToast((state.lang==='en' ? ('Server ' + (i+1) + ' failed — trying Server ' + (i+2))
+          : (state.lang==='tr' ? ('Sunucu ' + (i+1) + ' başarısız — Sunucu ' + (i+2) + ' deneniyor')
+             : ('Sunucu ' + (i+1) + ' uğursuz oldu — Sunucu ' + (i+2) + ' sınanır'))));
+        continue;
+      }
       return false;
     }
-    // stalled: otakuvid hiç oynatamadı.
+    // stalled: bu aday oynatamadı → sıradakine geç.
+    if(i < currentAninekoCandidates.length - 1){
+      showPlayerToast((state.lang==='en' ? ('Server ' + (i+1) + ' slow — trying Server ' + (i+2))
+        : (state.lang==='tr' ? ('Sunucu ' + (i+1) + ' yavaş — Sunucu ' + (i+2) + ' deneniyor')
+           : ('Sunucu ' + (i+1) + ' yavaşdır — Sunucu ' + (i+2) + ' sınanır'))));
+      continue;
+    }
+    // Son aday da oynatamadı.
     if(slowOnly){
       // Megavid de yok → üst akış hata panelini kursun.
       return false;
     }
     if(currentEpisodeNum === episodeNum && megavidAvailable){
-      // Otakuvid yavaş/çalışmadı ama Megavid var → bir dahaki sefere Megavid'e
+      // Anineko yavaş/çalışmadı ama Megavid var → bir dahaki sefere Megavid'e
       // doğrudan gitmek için hatırla (Megavid sonradan kaybolursa otomatik temizlenir).
       markSourceBroken(anime && anime.id, episodeNum);
       showPlayerToast((state.lang==='en' ? 'Server 1 slow — switching to Server 2'
@@ -5185,17 +5253,21 @@ function attachHlsErrorRecovery(hls, vid){
     console.warn('[anivax] HLS fatal error:', data.type, data.details, data.frag && data.frag.url);
     playbackActivity.fatal = true; // watchdog beklemesini sonlandır
     logClientError({ source:'hls', message: 'HLS fatal: ' + data.details, stack: null, context: (currentDetail ? (currentDetail.title&&currentDetail.title.romaji||currentDetail.id) + ' ep' + currentEpisodeNum : '') + ' [' + currentSourceLabel + ']' });
-    // Ortak son-çare: otakuvid bu bölümde gerçekten oynatamıyorsa Megavid'e geç.
-    const fallbackToMegavid = ()=>{
-      if(currentSourceLabel === 'otakuvid' && currentEpisodeNum && currentDetail){
-        markSourceBroken(currentDetail.id, currentEpisodeNum);
-        showPlayerToast((state.lang==='en' ? 'Server 1 failed — switching to Server 2'
-          : (state.lang==='tr' ? 'Sunucu 1 başarısız — Sunucu 2\'ye geçiliyor'
-             : 'Sunucu 1 uğursuz oldu — Sunucu 2\'yə keçilir')));
-        loadMegavidSourceIfNeeded(document.getElementById('playerFrame'), currentDetail, currentEpisodeNum).then(()=>{});
-        return true;
+    // Ortak son-çare: aktif anineko adayı (bibiemb/otakuhg/otakuvid) oynatamıyorsa
+    // önce SIRADAKİ adayı dene — varsa loadAninekoSourceIfNeeded döngüsü 'fatal'
+    // görüp onu kurar ve oynatmayı bekler (burada megavid'e geçmeyiz). Aday
+    // kalmadıysa Megavid'e geç.
+    const tryNextAninekoOrMegavid = ()=>{
+      if(!isAninekoSourceLabel(currentSourceLabel) || !currentEpisodeNum || !currentDetail) return false;
+      if(currentAninekoIndex + 1 < (currentAninekoCandidates || []).length){
+        return true; // döngü sıradaki adaya geçecek
       }
-      return false;
+      markSourceBroken(currentDetail.id, currentEpisodeNum);
+      showPlayerToast((state.lang==='en' ? 'Server 1 failed — switching to Server 2'
+        : (state.lang==='tr' ? 'Sunucu 1 başarısız — Sunucu 2\'ye geçiliyor'
+           : 'Sunucu 1 uğursuz oldu — Sunucu 2\'yə keçilir')));
+      loadMegavidSourceIfNeeded(document.getElementById('playerFrame'), currentDetail, currentEpisodeNum).then(()=>{});
+      return true;
     };
     switch(data.type){
       case Hls.ErrorTypes.NETWORK_ERROR:
@@ -5215,7 +5287,7 @@ function attachHlsErrorRecovery(hls, vid){
             playEpisode(currentEpisodeNum);
             return;
           }
-          if(fallbackToMegavid()) return;
+          if(tryNextAninekoOrMegavid()) return;
           showPlayerToast((state.lang==='en'?'Video couldn\'t load — try a different source':(state.lang==='tr'?'Video yüklenemedi — farklı bir kaynak dene':'Video yüklənə bilmədi — başqa mənbə sına')));
           showPlayerPlaceholder();
         }
@@ -5224,7 +5296,7 @@ function attachHlsErrorRecovery(hls, vid){
         if(mediaRecoveries < 1){
           mediaRecoveries++;
           hls.recoverMediaError(); // built-in hls.js recovery for decode errors
-        } else if(fallbackToMegavid()){
+        } else if(tryNextAninekoOrMegavid()){
           return;
         } else {
           showPlayerToast((state.lang==='en'?'Video couldn\'t load — try a different source':(state.lang==='tr'?'Video yüklenemedi — farklı bir kaynak dene':'Video yüklənə bilmədi — başqa mənbə sına')));
@@ -5232,7 +5304,7 @@ function attachHlsErrorRecovery(hls, vid){
         }
         break;
       default:
-        if(fallbackToMegavid()) return;
+        if(tryNextAninekoOrMegavid()) return;
         showPlayerToast((state.lang==='en'?'Playback error — try a different source':(state.lang==='tr'?'Oynatma hatası — farklı bir kaynak dene':'Oxutma xətası — başqa mənbə sına')));
         showPlayerPlaceholder();
         break;
@@ -5428,9 +5500,23 @@ function buildPlayerSettingsPanel(src){
       { v:'anineko', label:'Sunucu 1' },
       { v:'megavid', label:'Sunucu 2' }
     ];
-    srcWrap.innerHTML = opts.map(o=>`
-      <button class="option-pill ${pref===o.v?'active':''}" onclick="setSourcePref('${o.v}')">${o.label}</button>
-    `).join('');
+    // Worker birden fazla Anineko kaynağı döndürdüyse her birini ayrı pill olarak
+    // göster → kullanıcı Otakuhg/Bibiemb/Otakuvid arasında elle seçim yapabilir.
+    if(currentAninekoCandidates && currentAninekoCandidates.length > 1){
+      currentAninekoCandidates.forEach((c, i)=>{
+        opts.push({ v:'aneko:' + i, label: 'S' + (i+1) + ' • ' + (c.name || c.key) });
+      });
+    }
+    srcWrap.innerHTML = opts.map(o=>{
+      let active = pref === o.v;
+      let onClick = `setSourcePref('${o.v}')`;
+      if(o.v.indexOf('aneko:') === 0){
+        const idx = parseInt(o.v.split(':')[1], 10);
+        active = isAninekoSourceLabel(currentSourceLabel) && currentAninekoIndex === idx;
+        onClick = `switchAninekoSource(${idx})`;
+      }
+      return `<button class="option-pill ${active?'active':''}" onclick="${onClick}">${o.label}</button>`;
+    }).join('');
   }
 
   // Quality: HLS.js manifest'inden gelen seviyeler önceliklidir (otakuvid/megavid),
