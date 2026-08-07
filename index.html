@@ -662,6 +662,8 @@
     <button class="admin-tab" data-tab="seasons" onclick="switchAdminTab('seasons')" data-i18n="admin.tab.seasons">Sezonlar</button>
     <button class="admin-tab" data-tab="categories" onclick="switchAdminTab('categories')" data-i18n="admin.tab.categories">Kateqoriyalar</button>
     <button class="admin-tab" data-tab="manage" onclick="switchAdminTab('manage')" data-i18n="admin.tab.manage">İdarəetmə</button>
+    <button class="admin-tab" data-tab="sources" onclick="switchAdminTab('sources')" data-i18n="admin.tab.sources">Kaynaklar</button>
+    <button class="admin-tab" data-tab="debug" onclick="switchAdminTab('debug')" data-i18n="admin.tab.debug">Hata Ayıklama</button>
     <button class="admin-tab" data-tab="system" onclick="switchAdminTab('system')" data-i18n="admin.tab.system">Sistem</button>
   </div>
 
@@ -798,6 +800,50 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- TAB: Sources (kaynaklar) -->
+  <div id="adminTab-sources" class="admin-tab-panel hidden">
+    <div class="settings-group" style="margin-top:16px;">
+      <div class="settings-label">Video Kaynakları</div>
+      <div class="settings-card">
+        <div class="settings-row-sub" style="padding:4px 0 8px; font-size:12.5px; color:var(--text-dim);">
+          Bir kaynağı kapatırsan o kaynak HERKES İÇİN devre dışı kalır (site_config tablosu üzerinden global). Otakuvid kapanırsa akış doğrudan Megavid'e geçer, Megavid kapanırsa Otakuvid kullanılır.
+        </div>
+        <div id="sourceToggleList"></div>
+      </div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-label">Otakuvid Direkt Mod</div>
+      <div class="settings-card">
+        <div class="settings-row-sub" style="padding:4px 0 8px; font-size:12.5px; color:var(--text-dim);">
+          Segment'ler doğrudan CDN'den çekilir (0 worker isteği). Bozulursa otomatik proxy moda düşer. Varsayılan: AÇIK — kullanıcılar göremez, yalnızca buradan yönetilir.
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-row-label">Otakuvid Direkt Mod</div>
+          </div>
+          <button class="btn-ghost" id="directOtakuBtn2" onclick="toggleDirectOtaku()">Kapalı</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: Debug / hata ayıklama -->
+  <div id="adminTab-debug" class="admin-tab-panel hidden">
+    <div class="settings-group" style="margin-top:16px;">
+      <div class="settings-label">Hata Ayıklama</div>
+      <div class="settings-card" style="padding:14px;">
+        <div class="settings-row-sub" style="font-size:12.5px; color:var(--text-dim);">
+          Tarayıcı hataları, HLS fatal hataları ve kaynak çözümleme hataları buraya düşer (error_logs tablosu). Her kayıt sahibine atıflıdır (kullanıcı id / admin işareti / kaynak).
+        </div>
+        <div style="display:flex; gap:8px; margin-top:12px;">
+          <button class="btn-primary" style="flex:1;" onclick="renderErrorLogs()">Yenile</button>
+          <button class="btn-ghost" style="flex:1; color:var(--danger); border-color:color-mix(in srgb, var(--danger) 40%, transparent);" onclick="clearErrorLogs()">Temizle</button>
+        </div>
+      </div>
+    </div>
+    <div id="errorLogList" style="padding:0 18px 20px;"></div>
   </div>
 </div>
 
@@ -1008,6 +1054,96 @@ initSupabase();
 // Tiny helper so every sb.from(...) call site doesn't need its own null-check.
 function sbReady(){ return !!sb; }
 let currentUser = null; // set on auth state change
+
+// ================= GLOBAL KAYNAK ANAHTARLARI (site_config → Supabase) =================
+// Admin "Kaynaklar" panelinden yönetilir; burada kapatılan kaynak herkes için
+// devre dışı kalır. Tablo yoksa hata sessizce yutulur ve varsayılanlar (hepsi
+// açık) kullanılır. DDL:  create table if not exists public.site_config(
+//   key text primary key, data jsonb, updated_at timestamptz default now());
+let globalSources = { otakuvid: true, megavid: true, directOtaku: true };
+let globalSourcesLoaded = false;
+async function loadGlobalSources(){
+  if(!sbReady()){ globalSourcesLoaded = true; return; }
+  try{
+    const { data, error } = await withTimeout(sb.from('site_config').select('data').eq('key','sources').maybeSingle(), 4000);
+    if(!error && data && data.data) globalSources = { ...globalSources, ...data.data };
+  }catch(e){ console.warn('loadGlobalSources:', e); }
+  globalSourcesLoaded = true;
+  // Direkt mod global'den gelir — kullanıcılar değiştiremez, admin yönetir.
+  state.directOtaku = globalSources.directOtaku !== false;
+}
+function sourceEnabled(name){
+  return globalSources[name] !== false;
+}
+async function saveGlobalSources(){
+  if(!sbReady()) return;
+  try{
+    await withTimeout(sb.from('site_config').upsert({ key:'sources', data: globalSources, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
+  }catch(e){ console.warn('saveGlobalSources:', e); }
+}
+function toggleGlobalSource(name){
+  if(!requireAdmin()) return;
+  if(!globalSources.hasOwnProperty(name)) return;
+  globalSources[name] = globalSources[name] === false;
+  saveGlobalSources();
+  renderSourcesTab();
+  showToast((globalSources[name] !== false)
+    ? (state.lang==='en' ? (name + ' enabled for everyone') : ((name==='otakuvid'?'Otakuvid':'Megavid') + ' herkes için açıldı'))
+    : (state.lang==='en' ? (name + ' disabled for everyone') : ((name==='otakuvid'?'Otakuvid':'Megavid') + ' herkes için kapatıldı')));
+}
+
+// ================= HATA AYIKLAMA (error_logs → Supabase) =================
+// Tarayıcı/oynatıcı hataları batch halinde toplanır ve throttle ile Supabase'e
+// yazılır. Her kayıt sahibine atıflıdır: user_id (girişli kullanıcı / anon cihaz),
+// is_admin, source (global/hls/otakuvid/megavid/player), context (anime:ep).
+// DDL: create table if not exists public.error_logs(
+//   id uuid primary key default gen_random_uuid(), created_at timestamptz default now(),
+//   user_id text, is_admin bool default false, source text, message text,
+//   stack text, context text, url text);
+let errorLogQueue = [];
+let errorLogTimer = null;
+let errorLogSessionCount = 0;
+let errorLogDeviceId = null;
+function errorLogDevice(){
+  if(errorLogDeviceId) return errorLogDeviceId;
+  try{
+    errorLogDeviceId = localStorage.getItem('anivax_dev');
+    if(!errorLogDeviceId){ errorLogDeviceId = 'dev-' + Math.random().toString(36).slice(2,10); localStorage.setItem('anivax_dev', errorLogDeviceId); }
+  }catch(e){ errorLogDeviceId = 'dev-unknown'; }
+  return errorLogDeviceId;
+}
+function logClientError(opts){
+  opts = opts || {};
+  if(errorLogSessionCount > 60) return; // oturum başına sınır — DB'yi spam'leme
+  errorLogSessionCount++;
+  errorLogQueue.push({
+    user_id: currentUser ? (currentUser.id || 'anon') : ('anon-' + errorLogDevice()),
+    is_admin: !!isAdmin,
+    source: opts.source || 'general',
+    message: String(opts.message || 'unknown').slice(0, 500),
+    stack: opts.stack ? String(opts.stack).slice(0, 2000) : null,
+    context: opts.context ? String(opts.context).slice(0, 500) : null,
+    url: (location.pathname || '') + (location.search || '')
+  });
+  if(!errorLogTimer){
+    errorLogTimer = setTimeout(()=>{
+      errorLogTimer = null;
+      const batch = errorLogQueue.splice(0, errorLogQueue.length);
+      if(!sbReady() || !batch.length) return;
+      sb.from('error_logs').insert(batch).then(()=>{}).catch(()=>{});
+    }, 5000);
+  }
+}
+window.addEventListener('error', (e)=>{
+  logClientError({ source:'global', message: e.message || 'error', stack: (e.error && e.error.stack) || null, context: (e.filename||'') + ':' + (e.lineno||'') });
+});
+window.addEventListener('unhandledrejection', (e)=>{
+  const r = e && e.reason;
+  logClientError({ source:'promise', message: (r && r.message) || String(r), stack: (r && r.stack) || null });
+});
+function escapeHtml(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 // ================= I18N =================
 const I18N = {
   az: {
@@ -1018,7 +1154,7 @@ const I18N = {
     "library.title":"Kitabxana","detail.watch":"İzlə","detail.episodes":"Bölümlər","detail.similar":"Bunu izləyənlər bunları da izlədi",
     "player.title":"Oynadıcı","player.noSource":"Video mənbəyi hələ bağlanmayıb.<br>Öz videonu əlavə edəndə burda oynayacaq.",
     "admin.title":"Admin Panel","admin.searchPlaceholder":"AniList-də axtar (məs: Naruto)...",
-    "admin.tab.dashboard":"Dashboard","admin.tab.add":"Anime əlavə et","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kateqoriyalar","admin.tab.manage":"İdarəetmə","admin.tab.system":"Sistem",
+    "admin.tab.dashboard":"Dashboard","admin.tab.add":"Anime əlavə et","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kateqoriyalar","admin.tab.manage":"İdarəetmə","admin.tab.system":"Sistem","admin.tab.sources":"Mənbələr","admin.tab.debug":"Xətalar",
     "admin.dash.totalAnime":"Toplam anime","admin.dash.totalEpisodes":"Toplam bölüm","admin.dash.missingVideo":"Eksik video","admin.dash.missingSubtitle":"Eksik altyazı","admin.dash.contentCheck":"İçerik kontrolü",
     "admin.cat.hint":"Ana səhifədə görünəcək kateqoriyaları yarat və idarə et.","admin.cat.new":"Yeni kateqoriya",
     "admin.cat.nameAz":"Ad (Azərbaycanca)","admin.cat.nameTr":"Ad (Türkçe)","admin.cat.nameEn":"Name (English)",
@@ -1055,7 +1191,7 @@ const I18N = {
     "library.title":"Kitaplık","detail.watch":"İzle","detail.episodes":"Bölümler","detail.similar":"Bunu izleyenler şunları da izledi",
     "player.title":"Oynatıcı","player.noSource":"Video kaynağı henüz bağlanmadı.<br>Kendi videonu ekleyince burada oynayacak.",
     "admin.title":"Admin Panel","admin.searchPlaceholder":"AniList'te ara (örn: Naruto)...",
-    "admin.tab.dashboard":"Dashboard","admin.tab.add":"Anime ekle","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kategoriler","admin.tab.manage":"Yönetim","admin.tab.system":"Sistem",
+    "admin.tab.dashboard":"Dashboard","admin.tab.add":"Anime ekle","admin.tab.seasons":"Sezonlar","admin.tab.categories":"Kategoriler","admin.tab.manage":"Yönetim","admin.tab.system":"Sistem","admin.tab.sources":"Kaynaklar","admin.tab.debug":"Hata Ayıklama",
     "admin.dash.totalAnime":"Toplam anime","admin.dash.totalEpisodes":"Toplam bölüm","admin.dash.missingVideo":"Eksik video","admin.dash.missingSubtitle":"Eksik altyazı","admin.dash.contentCheck":"İçerik kontrolü",
     "admin.cat.hint":"Ana sayfada görünecek kategorileri oluştur ve yönet.","admin.cat.new":"Yeni kategori",
     "admin.cat.nameAz":"İsim (Azərbaycanca)","admin.cat.nameTr":"İsim (Türkçe)","admin.cat.nameEn":"İsim (English)",
@@ -1092,7 +1228,7 @@ const I18N = {
     "library.title":"Library","detail.watch":"Watch","detail.episodes":"Episodes","detail.similar":"People who watched this also watched",
     "player.title":"Player","player.noSource":"Video source not connected yet.<br>It will play here once you add your own video.",
     "admin.title":"Admin Panel","admin.searchPlaceholder":"Search AniList (e.g. Naruto)...",
-    "admin.tab.dashboard":"Dashboard","admin.tab.add":"Add anime","admin.tab.seasons":"Seasons","admin.tab.categories":"Categories","admin.tab.manage":"Manage","admin.tab.system":"System",
+    "admin.tab.dashboard":"Dashboard","admin.tab.add":"Add anime","admin.tab.seasons":"Seasons","admin.tab.categories":"Categories","admin.tab.manage":"Manage","admin.tab.system":"System","admin.tab.sources":"Sources","admin.tab.debug":"Debug",
     "admin.dash.totalAnime":"Total anime","admin.dash.totalEpisodes":"Total episodes","admin.dash.missingVideo":"Missing video","admin.dash.missingSubtitle":"Missing subtitle","admin.dash.contentCheck":"Content check",
     "admin.cat.hint":"Create and manage categories shown on the home page.","admin.cat.new":"New category",
     "admin.cat.nameAz":"Name (Azərbaycanca)","admin.cat.nameTr":"Name (Türkçe)","admin.cat.nameEn":"Name (English)",
@@ -1141,7 +1277,7 @@ let state = {
   megavidMissing: {},  // { "animeId:episode": timestamp } — Megavid'de bölüm yok (1 saat TTL)
   feedConfig: null,     // { provider:'nyaa-en', url:'...' } — admin feed kaynağı
   sourcePref: 'auto'    // 'auto' | 'anineko' | 'megavid' — bölüm kaynak önceliği
-  ,directOtaku: false   // Otakuvid Direkt Mod: segment'ler doğrudan CDN'den (0 worker isteği)
+  ,directOtaku: true   // Otakuvid Direkt Mod: segment'ler doğrudan CDN'den (0 worker isteği). Global'den yönetilir.
 };
 
 // ================= ADMIN AUTH =================
@@ -1396,6 +1532,9 @@ async function loadState(){
       localStorage.setItem('anivax_broken_v', '2');
     }
   }catch(e){}
+
+  // Admin "Kaynaklar" panelindeki global kaynak anahtarlarını yükle (herkes için).
+  try{ await loadGlobalSources(); }catch(e){ console.error('loadState: loadGlobalSources failed', e); }
 
   // 1) Anında render: yerel önbellekten kütüphane gelirse home hemen çizilir,
   //    ağ yanıtı beklenmez (eski davranış: 6 seri fetch bitene kadar boş ekran).
@@ -1897,6 +2036,8 @@ function switchAdminTab(tab){
   if(tab==='seasons') renderSeasonBaseList();
   if(tab==='categories') renderCategoryList();
   if(tab==='manage') renderLibraryManage();
+  if(tab==='sources') renderSourcesTab();
+  if(tab==='debug') renderErrorLogs();
   if(tab==='system') updateSystemTab();
 }
 
@@ -2249,6 +2390,7 @@ async function aninekoResolveSource(anime, episodeNum){
       if(res.ok && data && data.status === 'ok' && data.source) return data;
     }catch(e){ /* try next title */ }
   }
+  logClientError({ source:'otakuvid', message: 'Anineko source resolve failed', context: (anime && anime.id ? anime.id + ' ep' + episodeNum : 'ep' + episodeNum) });
   return null;
 }
 
@@ -2260,6 +2402,8 @@ async function aninekoResolveSource(anime, episodeNum){
 // şans → yavaş CDN host'ları (segment 30s+) için uzun sabırla beklenir. Megavid
 // VARSA otakuvid kısa sürede başlamazsa hızlıca Megavid'e geçilir.
 async function loadAninekoSourceIfNeeded(frame, anime, episodeNum, megavidInfo){
+  // Admin "Kaynaklar" panelinde Otakuvid kapatıldıysa herkes için atlanır.
+  if(!sourceEnabled('otakuvid')) return false;
   // Daha önce bu bölümde otakuvid fatal hata verdiyse otakuvidi atla,
   // zincir doğrudan Megavid'i denesin.
   if(isSourceBroken(anime && anime.id, episodeNum)){
@@ -2364,7 +2508,10 @@ async function waitForPlayback(episodeNum, opts){
       if(baseFrames < 0){ baseFrames = frames; frameGateStart = Date.now(); }
       if(frames > baseFrames) return 'ok'; // yeni kare üretildi → gerçekten oynuyor
       // Zaman 5s+ ilerledi ama tek yeni kare bile üretilmedi → siyah ekran → fallback.
-      if(vid.currentTime > 5 && (Date.now() - frameGateStart) > 2500) return 'stalled';
+      if(vid.currentTime > 5 && (Date.now() - frameGateStart) > 2500){
+        logClientError({ source:'player', message: 'Playback stalled (time advances, no frames) — black screen', context: (currentDetail ? (currentDetail.title&&currentDetail.title.romaji||currentDetail.id) + ' ep' + currentEpisodeNum : '') + ' [' + currentSourceLabel + ']' });
+        return 'stalled';
+      }
       await new Promise(r=>setTimeout(r, 400));
       continue;
     }
@@ -2418,6 +2565,7 @@ async function megavidResolveSource(anime, episodeNum){
       if(res.ok && data && data.status === 'error' && /couldn't find|not exist|removed|unavailable yet/i.test(data.message || '')) notFound++;
     }catch(e){ /* try next id namespace */ }
   }
+  if(notFound === 0) logClientError({ source:'megavid', message: 'Megavid resolve failed (network/' + (attempts[0]||'no-id') + ')', context: (anime && anime.id ? anime.id + ' ep' + episodeNum : 'ep' + episodeNum) });
   return { data: null, missing: attempts.length > 0 && notFound === attempts.length };
 }
 
@@ -2443,6 +2591,7 @@ function megavidCacheMissing(anime, episodeNum){
 }
 // Megavid bu bölümde var mı? Sonuç: { available, missing, data }
 async function megavidAvailability(anime, episodeNum){
+  if(!sourceEnabled('megavid')) return { available: false, missing: false, data: null };
   if(megavidCachedMissing(anime, episodeNum)) return { available: false, missing: true, data: null };
   const { data, missing } = await megavidResolveSource(anime, episodeNum);
   if(missing){
@@ -2502,20 +2651,23 @@ function loadMegavidSourceIfNeeded(frame, anime, episodeNum, known){
     const hasTorrent = src && Array.isArray(src.torrents) && src.torrents.length > 0;
     const hasVideo = !!(src && src.video);
 
+    // Admin "Kaynaklar" panelinde Megavid kapatıldıysa herkes için atlanır.
+    if(!sourceEnabled('megavid')){ megavidLastStatus = 'disabled'; return false; }
+
     // Mevcut oynatılabilir kaynak varsa karışma.
     if(hasTorrent || hasVideo) return false;
 
     const info = known || await megavidAvailability(anime, episodeNum);
-    if(!info || !info.available){
-      if(info && info.missing){
-        // Bölüm gerçekten Megavid'de yok → iframe kara deliğine düşme.
-        megavidLastStatus = 'missing';
-        clearSourceBroken(anime && anime.id, episodeNum);
-        return false;
-      }
-      megavidLastStatus = 'transient'; // geçici hata — iframe yedeği üst akışta denenecek
+  if(!info || !info.available){
+    if(info && info.missing){
+      // Bölüm gerçekten Megavid'de yok → iframe kara deliğine düşme.
+      megavidLastStatus = 'missing';
+      clearSourceBroken(anime && anime.id, episodeNum);
       return false;
     }
+    if(megavidLastStatus !== 'disabled') megavidLastStatus = 'transient'; // geçici hata — iframe yedeği üst akışta denenecek
+    return false;
+  }
     megavidLastStatus = 'ok';
     const data = info.data;
     if(!data || !data.source) return false;
@@ -2893,23 +3045,100 @@ function updateSystemTab(){
 
 function refreshDirectOtakuBtn(){
   const btn = document.getElementById('directOtakuBtn');
-  if(!btn) return;
-  btn.textContent = state.directOtaku ? 'AÇIK' : 'Kapalı';
-  btn.classList.toggle('active', !!state.directOtaku);
-  if(state.directOtaku){ btn.style.color = 'var(--accent)'; btn.style.borderColor = 'color-mix(in srgb, var(--accent) 40%, transparent)'; }
-  else { btn.style.color = ''; btn.style.borderColor = ''; }
+  const btn2 = document.getElementById('directOtakuBtn2');
+  [btn, btn2].forEach(b=>{
+    if(!b) return;
+    b.textContent = state.directOtaku ? 'AÇIK' : 'Kapalı';
+    b.classList.toggle('active', !!state.directOtaku);
+    if(state.directOtaku){ b.style.color = 'var(--accent)'; b.style.borderColor = 'color-mix(in srgb, var(--accent) 40%, transparent)'; }
+    else { b.style.color = ''; b.style.borderColor = ''; }
+  });
 }
 
 function toggleDirectOtaku(){
-  state.directOtaku = !state.directOtaku;
+  if(!requireAdmin()) return;
+  globalSources.directOtaku = globalSources.directOtaku === false;
+  state.directOtaku = globalSources.directOtaku !== false;
   saveSettings();
+  saveGlobalSources();
   refreshDirectOtakuBtn();
+  if(typeof renderSourcesTab === 'function') renderSourcesTab();
   showPlayerToast(state.directOtaku
     ? (state.lang==='en' ? 'Otakuvid Direct mode ON — segments stream straight from CDN (0 worker requests)'
        : (state.lang==='tr' ? 'Otakuvid Direkt mod AÇIK — segmentler CDN\'den (0 worker isteği)' : 'Otakuvid Direkt rejim AÇIQ — seqmentlər CDN-dən (0 worker sorğusu)'))
     : (state.lang==='en' ? 'Otakuvid proxy mode restored' : (state.lang==='tr' ? 'Otakuvid proxy moda döndü' : 'Otakuvid proxy rejiminə qayıdıldı')));
   const current = currentEpisodeNum;
   if(current){ playEpisode(current); }
+}
+
+// Admin "Kaynaklar" sekmesi: Otakuvid / Megavid aç-kapa (global).
+function renderSourcesTab(){
+  const wrap = document.getElementById('sourceToggleList');
+  if(!wrap) return;
+  const rows = [
+    { key:'otakuvid', label:'Otakuvid', sub:'1-2 istek/bölüm — segmentler tarayıcıdan CDN\'e doğrudan gider' },
+    { key:'megavid', label:'Megavid', sub:'~325 istek/bölüm — segmentler worker /proxy üzerinden geçer' }
+  ];
+  wrap.innerHTML = rows.map(r=>{
+    const on = globalSources[r.key] !== false;
+    return `
+    <div class="settings-row">
+      <div>
+        <div class="settings-row-label">${r.label}</div>
+        <div class="settings-row-sub">${r.sub}</div>
+      </div>
+      <button class="btn-ghost" onclick="toggleGlobalSource('${r.key}')" style="${on?'color:var(--accent);border-color:color-mix(in srgb, var(--accent) 40%, transparent);':''}">${on?'AÇIK':'Kapalı'}</button>
+    </div>`;
+  }).join('');
+  refreshDirectOtakuBtn();
+}
+
+// Admin "Hata Ayıklama" sekmesi: error_logs tablosundan son 100 kaydı listeler.
+async function renderErrorLogs(){
+  const wrap = document.getElementById('errorLogList');
+  if(!wrap) return;
+  wrap.innerHTML = '<div class="loading-row"><span class="spinner"></span>Yükleniyor...</div>';
+  if(!sbReady()){
+    wrap.innerHTML = '<div class="empty-row" style="color:var(--danger);">Supabase bağlantısı yok — hata kaydı yapılamıyor.</div>';
+    return;
+  }
+  try{
+    const { data, error } = await withTimeout(sb.from('error_logs').select('*').order('created_at', { ascending:false }).limit(100), 6000);
+    if(error){
+      wrap.innerHTML = '<div class="empty-row" style="color:var(--danger);">error_logs tablosu okunamadı: ' + escapeHtml(error.message) + '.<br><span style="font-size:11px;">SQL çalıştırman gerekiyor: <code style="word-break:break-all;">create table if not exists public.error_logs (id uuid primary key default gen_random_uuid(), created_at timestamptz not null default now(), user_id text, is_admin boolean not null default false, source text, message text not null, stack text, context text, url text);</code></span></div>';
+      return;
+    }
+    if(!data || !data.length){
+      wrap.innerHTML = '<div class="empty-row">Kayıt yok — henüz hata yakalanmadı.</div>';
+      return;
+    }
+    wrap.innerHTML = data.map(r=>{
+      const t = (r.created_at||'').replace('T',' ').slice(0,19);
+      const who = (r.is_admin ? '<span style="color:var(--accent); font-weight:700;">ADMIN</span>' : '<span>user</span>');
+      return `
+      <div class="settings-card" style="padding:12px 14px; margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; gap:10px; margin-bottom:6px; flex-wrap:wrap;">
+          <span style="font-size:11px; color:var(--text-dim);">${t}</span>
+          <span style="font-size:11px;">${who} · ${escapeHtml((r.user_id||'?').slice(0,12))} · <b>${escapeHtml(r.source||'general')}</b></span>
+        </div>
+        <div style="font-size:12.5px; color:#E8B84B; word-break:break-word;">${escapeHtml(r.message)}</div>
+        ${r.context ? `<div style="font-size:11px; color:var(--text-dim); margin-top:4px; word-break:break-word;">${escapeHtml(r.context)}</div>` : ''}
+        ${r.stack ? `<details style="margin-top:6px;"><summary style="font-size:11px; color:var(--text-dim); cursor:pointer;">stack</summary><pre style="font-size:10px; color:#8B8F9C; white-space:pre-wrap; margin:4px 0 0; max-height:120px; overflow:auto;">${escapeHtml(r.stack)}</pre></details>` : ''}
+      </div>`;
+    }).join('');
+  }catch(e){
+    wrap.innerHTML = '<div class="empty-row" style="color:var(--danger);">' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+async function clearErrorLogs(){
+  if(!requireAdmin()) return;
+  if(!sbReady()) return;
+  try{
+    await withTimeout(sb.from('error_logs').delete().gte('created_at', '1970-01-01'), 6000);
+    showToast('Hata kayıtları temizlendi');
+  }catch(e){ showToast('Temizlenemedi: ' + e.message); }
+  renderErrorLogs();
 }
 
 // ================= SEASON LINKING (base pick -> multi-select -> confirm) =================
@@ -4554,9 +4783,9 @@ function loadEpisodeIntoPlayer(episodeNum){
     if(pref === 'megavid'){
       loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didPlay => {
         if(!didPlay && currentEpisodeNum === episodeNum){
-          loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, { available: false, missing: megavidLastStatus === 'missing' }).then(didAnineko => {
+          loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, { available: false, missing: megavidLastStatus === 'missing' || megavidLastStatus === 'disabled' }).then(didAnineko => {
             if(!didAnineko && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
-              if(megavidLastStatus === 'missing') showPlayerUnavailable();
+              if(megavidLastStatus === 'missing' || megavidLastStatus === 'disabled') showPlayerUnavailable();
               else mountMegavidIframe(frame, currentDetail, episodeNum);
             }
           });
@@ -4570,7 +4799,7 @@ function loadEpisodeIntoPlayer(episodeNum){
         if(!didPlay && currentEpisodeNum === episodeNum){
           loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
             if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
-              if(megavidLastStatus === 'missing') showPlayerUnavailable();
+              if(megavidLastStatus === 'missing' || megavidLastStatus === 'disabled') showPlayerUnavailable();
               else mountMegavidIframe(frame, currentDetail, episodeNum);
             }
           });
@@ -4937,6 +5166,7 @@ function attachHlsErrorRecovery(hls, vid){
     if(!data.fatal) return; // non-fatal errors are normal and self-heal
     console.warn('[anivax] HLS fatal error:', data.type, data.details, data.frag && data.frag.url);
     playbackActivity.fatal = true; // watchdog beklemesini sonlandır
+    logClientError({ source:'hls', message: 'HLS fatal: ' + data.details, stack: null, context: (currentDetail ? (currentDetail.title&&currentDetail.title.romaji||currentDetail.id) + ' ep' + currentEpisodeNum : '') + ' [' + currentSourceLabel + ']' });
     // Ortak son-çare: otakuvid bu bölümde gerçekten oynatamıyorsa Megavid'e geç.
     const fallbackToMegavid = ()=>{
       if(currentSourceLabel === 'otakuvid' && currentEpisodeNum && currentDetail){
@@ -5182,9 +5412,7 @@ function buildPlayerSettingsPanel(src){
     ];
     srcWrap.innerHTML = opts.map(o=>`
       <button class="option-pill ${pref===o.v?'active':''}" onclick="setSourcePref('${o.v}')">${o.label}</button>
-    `).join('')
-    + (pref !== 'megavid' ? `
-      <button class="option-pill ${state.directOtaku?'active':''}" style="${state.directOtaku?'border-color:var(--accent); color:var(--accent);':''}" onclick="toggleDirectOtaku()">${state.lang==='en'?'Direct':(state.lang==='tr'?'Direkt':'Direkt')}: ${state.directOtaku?'AÇIK':'KAPALI'}</button>` : '');
+    `).join('');
   }
 
   // Quality: HLS.js manifest'inden gelen seviyeler önceliklidir (otakuvid/megavid),
