@@ -2579,7 +2579,7 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum, megavidInfo){
     const ok = await mountAninekoCandidate(i, frame);
     if(!ok) continue;
     // Son aday: biraz daha sabır. Yalnızca Megavid de yoksa uzun sabır verilir.
-    const timeoutMs = (slowOnly && i === currentAninekoCandidates.length - 1) ? 45000 : 12000;
+    const timeoutMs = (slowOnly && i === currentAninekoCandidates.length - 1) ? 45000 : 9000;
     const result = await waitForPlayback(episodeNum, { timeoutMs });
     if(result === 'ok'){
       clearSourceBroken(anime && anime.id, episodeNum);
@@ -2729,20 +2729,24 @@ async function megavidAvailability(anime, episodeNum){
   return { available: false, missing: false, data: null }; // geçici hata — sonra tekrar dene
 }
 
-// m3u8 ve .vtt dosyalarını Worker /proxy üzerinden geçirerek oynatılabilir
-// URL'ler üretir (CORS + Referer işini Worker halleder).
-function isOtakuvidHlsUrl(u){
-  try { return /\/hls3?\//i.test(new URL(u).pathname); } catch { return false; }
+// master/segment isteklerini Worker/proxy üzerinden geçirmeden tarayıcının
+// doğrudan CDN'den çekebileceği URL'leri belirler. Kırılırsa proxy fallback devreye girer.
+function isDirectPlayableUrl(u){
+  try{
+    const p = new URL(u);
+    if(p.protocol !== 'https:' && p.protocol !== 'http:') return false;
+    // Otakuvid token'lı master (/hls{2,3}/) ve vivibebe public/stream ikisi de
+    // doğrudan oynatılabilir — anineko'da aynı şekilde çekilir.
+    return /\/hls[0-9]?\//i.test(p.pathname) || /^\/public\/stream\//i.test(p.pathname);
+  }catch(e){ return false; }
 }
 
 function megavidProxyUrl(rawUrl, referer){
   if(!rawUrl) return '';
-  // Otakuvid Direkt Mod: master/child/segment isteklerini worker'a hiç sürmeyip
-  // tarayıcının doğrudan otakuvid CDN'inden çekmesini sağlar. CDN, gelen
-  // Origin'e CORS yansıtıyor ve Referer değeri kontrol etmiyor (varlığı yeterli)
-  // → 1 izleyici ≈ 1-2 worker isteği (yalnızca çözümleme + altyazı).
-  // Bu açıklık ileride kapatılırsa otomatik proxy moda düşülür (admin paneli toggle).
-  if(state.directOtaku && isOtakuvidHlsUrl(rawUrl)){
+  // Doğrudan mod: master/child/segment isteklerini worker'a hiç sürmeyip tarayıcının
+  // doğrudan CDN'den çekmesini sağlar → 1 izleyici ≈ 1-2 worker isteği (sadece
+  // çözümleme + altyazı). Kırılırsa otomatik proxy moda düşülür (admin toggle).
+  if(state.directOtaku && isDirectPlayableUrl(rawUrl)){
     return rawUrl;
   }
   return `${MEGAVID_WORKER_BASE}/proxy?url=${encodeURIComponent(rawUrl)}&referer=${encodeURIComponent(referer || 'https://megavid.buzz/')}`;
@@ -5434,9 +5438,9 @@ function attachHlsErrorRecovery(hls, vid){
             state.directOtaku = false;
             saveSettings();
             refreshDirectOtakuBtn();
-            showPlayerToast((state.lang==='en' ? 'Otakuvid CDN blocked direct access — switched to proxy mode'
-              : (state.lang==='tr' ? 'Otakuvid CDN doğrudan erişimi engelledi — proxy moda geçildi'
-                 : 'Otakuvid CDN birbaşa girişi blokladı — proxy rejiminə keçildi')));
+            showPlayerToast((state.lang==='en' ? 'CDN blocked direct access — switched to proxy mode'
+              : (state.lang==='tr' ? 'CDN doğrudan erişimi engelledi — proxy moda geçildi'
+                 : 'CDN birbaşa girişi blokladı — proxy rejiminə keçildi')));
             playEpisode(currentEpisodeNum);
             return;
           }
