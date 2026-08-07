@@ -401,7 +401,15 @@
   .cat-chip{ display:flex; align-items:center; gap:6px; background:var(--bg); border:1px solid var(--line); border-radius:9px; padding:5px 6px 5px 5px; font-size:11px; font-weight:600; }
   .cat-chip img{ width:20px; height:28px; border-radius:4px; object-fit:cover; }
   .cat-chip-remove{ color:var(--danger); display:flex; align-items:center; }
-  .cat-add-anime-btn{ margin: 0 14px 13px; padding:9px; border-radius:9px; border:1px dashed var(--line); background:transparent; color:var(--text-dim); font-size:12px; font-weight:700; width:calc(100% - 28px); }
+  .cat-add-anime-btn{ margin: 0 14px 30px; padding:9px; border-radius:9px; border:1px dashed var(--line); background:transparent; color:var(--text-dim); font-size:12px; font-weight:700; width:calc(100% - 28px); }
+   /* Altyazı görünümü — değişkenler JS ile state.sub* üzerinden video elemanına atanır */
+   #mainVideoEl::cue{
+     font-size: var(--cue-size, 1.5em);
+     color: var(--cue-color, rgb(255,255,255));
+     background-color: var(--cue-bg, rgba(0,0,0,0.7));
+     text-shadow: 0 0 2px #000;
+   }
+   .sub-size-pill, .sub-color-pill, .sub-bg-pill{ margin:2px; }
 </style>
 </head>
 <body data-theme="dark">
@@ -561,6 +569,12 @@
       <div id="subtitleRow" style="margin-bottom:14px;">
         <div class="settings-label" style="margin-bottom:8px; color:#aaa;" data-i18n="player.subtitles">Altyazı</div>
         <div class="lang-options" id="subtitleOptions" style="padding:0;"></div>
+      </div>
+      <div id="subtitleStyleRow" style="margin-bottom:14px;">
+        <div class="settings-label" style="margin-bottom:8px; color:#aaa;">Altyazı stili</div>
+        <div class="lang-options" id="subSizeOptions" style="padding:0;"></div>
+        <div class="lang-options" id="subColorOptions" style="margin-top:8px; padding:0;"></div>
+        <div class="lang-options" id="subBgOptions" style="margin-top:8px; padding:0;"></div>
       </div>
       <div id="speedRow" style="margin-bottom:14px;">
         <div class="settings-label" style="margin-bottom:8px; color:#aaa;" data-i18n="player.speed">Sürət</div>
@@ -787,7 +801,7 @@
         </div>
         <div class="settings-row">
           <div>
-            <div class="settings-row-label">Otakuvid Direkt Mod</div>
+            <div class="settings-row-label">Sunucu 1 Akış Modu</div>
             <div class="settings-row-sub">Segment'leri doğrudan CDN'den çek (0 worker isteği). Bozulursa otomatik proxy moda düşer.</div>
           </div>
           <button class="btn-ghost" id="directOtakuBtn" onclick="toggleDirectOtaku()">Kapalı</button>
@@ -808,20 +822,20 @@
       <div class="settings-label">Video Kaynakları</div>
       <div class="settings-card">
         <div class="settings-row-sub" style="padding:4px 0 8px; font-size:12.5px; color:var(--text-dim);">
-          Bir kaynağı kapatırsan o kaynak HERKES İÇİN devre dışı kalır (site_config tablosu üzerinden global). Otakuvid kapanırsa akış doğrudan Megavid'e geçer, Megavid kapanırsa Otakuvid kullanılır.
+          Bir kaynağı kapatırsan o kaynak HERKES İÇİN devre dışı kalır (site_config tablosu üzerinden global). Sunucu 1 kapanırsa akış doğrudan Sunucu 2'ye geçer, Sunucu 2 kapanırsa Sunucu 1 kullanılır.
         </div>
         <div id="sourceToggleList"></div>
       </div>
     </div>
     <div class="settings-group">
-      <div class="settings-label">Otakuvid Direkt Mod</div>
+      <div class="settings-label">Sunucu 1 Akış Modu</div>
       <div class="settings-card">
         <div class="settings-row-sub" style="padding:4px 0 8px; font-size:12.5px; color:var(--text-dim);">
-          Segment'ler doğrudan CDN'den çekilir (0 worker isteği). Bozulursa otomatik proxy moda düşer. Varsayılan: AÇIK — kullanıcılar göremez, yalnızca buradan yönetilir.
+          AÇIK: segmentler doğrudan CDN'den çekilir (0 worker isteği). Bozulursa otomatik proxy moda düşer. Varsayılan: AÇIK — kullanıcılar göremez, yalnızca buradan yönetilir.
         </div>
         <div class="settings-row">
           <div>
-            <div class="settings-row-label">Otakuvid Direkt Mod</div>
+            <div class="settings-row-label">Sunucu 1 Akış Modu</div>
           </div>
           <button class="btn-ghost" id="directOtakuBtn2" onclick="toggleDirectOtaku()">Kapalı</button>
         </div>
@@ -1088,8 +1102,8 @@ function toggleGlobalSource(name){
   saveGlobalSources();
   renderSourcesTab();
   showToast((globalSources[name] !== false)
-    ? (state.lang==='en' ? (name + ' enabled for everyone') : ((name==='otakuvid'?'Otakuvid':'Megavid') + ' herkes için açıldı'))
-    : (state.lang==='en' ? (name + ' disabled for everyone') : ((name==='otakuvid'?'Otakuvid':'Megavid') + ' herkes için kapatıldı')));
+    ? (state.lang==='en' ? (name + ' enabled for everyone') : ((name==='otakuvid'?'Sunucu 1':'Sunucu 2') + ' herkes için açıldı'))
+    : (state.lang==='en' ? (name + ' disabled for everyone') : ((name==='otakuvid'?'Sunucu 1':'Sunucu 2') + ' herkes için kapatıldı')));
 }
 
 // ================= HATA AYIKLAMA (error_logs → Supabase) =================
@@ -1278,6 +1292,10 @@ let state = {
   feedConfig: null,     // { provider:'nyaa-en', url:'...' } — admin feed kaynağı
   sourcePref: 'auto'    // 'auto' | 'anineko' | 'megavid' — bölüm kaynak önceliği
   ,directOtaku: true   // Otakuvid Direkt Mod: segment'ler doğrudan CDN'den (0 worker isteği). Global'den yönetilir.
+  // Altyazı görünüm ayarları (kullanıcıya özel)
+  ,subSize: 1.4       // em — altyazı boyutu
+  ,subColor: '#ffffff'// altyazı rengi
+  ,subBg: 0.75         // altyazı arka plan opaklığı (0 = şeffaf)
 };
 
 // ================= ADMIN AUTH =================
@@ -2408,9 +2426,9 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum, megavidInfo){
   // zincir doğrudan Megavid'i denesin.
   if(isSourceBroken(anime && anime.id, episodeNum)){
     if(currentEpisodeNum === episodeNum){
-      showPlayerToast((state.lang==='en' ? 'Otakuvid failed before — using Megavid'
-        : (state.lang==='tr' ? 'Otakuvid daha önce başarısız oldu — Megavid kullanılıyor'
-           : 'Otakuvid əvvəllər uğursuz oldu — Megavid istifadə olunur')));
+      showPlayerToast((state.lang==='en' ? 'Server 1 failed before — using Server 2'
+        : (state.lang==='tr' ? 'Sunucu 1 daha önce başarısız oldu — Sunucu 2 kullanılıyor'
+           : 'Sunucu 1 əvvəllər uğursuz oldu — Sunucu 2 istifadə olunur')));
     }
     return false;
   }
@@ -2436,7 +2454,7 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum, megavidInfo){
       else return false;
     }
     if(!document.getElementById('mainVideoEl')) return false; // mount başarısız oldu
-    showPlayerToast('Otakuvid • ' + (data.meta && data.meta.slug ? data.meta.slug : 'Anineko'));
+    showPlayerToast('Sunucu 1 • ' + (data.meta && data.meta.slug ? data.meta.slug : 'Anineko'));
 
     // Megavid varlığını mount sırasında paralel çözülmüş promise'den al.
     const mInfo = megavidInfo ? await Promise.resolve(megavidInfo) : null;
@@ -2470,9 +2488,9 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum, megavidInfo){
       // Otakuvid yavaş/çalışmadı ama Megavid var → bir dahaki sefere Megavid'e
       // doğrudan gitmek için hatırla (Megavid sonradan kaybolursa otomatik temizlenir).
       markSourceBroken(anime && anime.id, episodeNum);
-      showPlayerToast((state.lang==='en' ? 'Otakuvid slow — switching to Megavid'
-        : (state.lang==='tr' ? 'Otakuvid yavaş — Megavid\'e geçiliyor'
-           : 'Otakuvid yavaşdır — Megavid\'ə keçilir')));
+      showPlayerToast((state.lang==='en' ? 'Server 1 slow — switching to Server 2'
+        : (state.lang==='tr' ? 'Sunucu 1 yavaş — Sunucu 2\'ye geçiliyor'
+           : 'Sunucu 1 yavaşdır — Sunucu 2\'yə keçilir')));
     }
     return false;
   }
@@ -2634,7 +2652,7 @@ function mountMegavidIframe(frame, anime, episodeNum){
   iframe.allow = 'accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture';
   iframe.allowFullscreen = true;
   frame.appendChild(iframe);
-  showPlayerToast(state.lang==='en' ? 'Playing via Megavid (streamer player)' : (state.lang==='tr' ? 'Megavid player ile oynatılıyor' : 'Megavid player ilə oynadılır'));
+  showPlayerToast(state.lang==='en' ? 'Playing via Server 2 (streamer player)' : (state.lang==='tr' ? 'Sunucu 2 player ile oynatılıyor' : 'Sunucu 2 player ilə oynadılır'));
 }
 
 // Ana akış: mevcut kaynak yoksa / torrent çözülemezse Megavid'i otomatik dene.
@@ -3064,9 +3082,9 @@ function toggleDirectOtaku(){
   refreshDirectOtakuBtn();
   if(typeof renderSourcesTab === 'function') renderSourcesTab();
   showPlayerToast(state.directOtaku
-    ? (state.lang==='en' ? 'Otakuvid Direct mode ON — segments stream straight from CDN (0 worker requests)'
-       : (state.lang==='tr' ? 'Otakuvid Direkt mod AÇIK — segmentler CDN\'den (0 worker isteği)' : 'Otakuvid Direkt rejim AÇIQ — seqmentlər CDN-dən (0 worker sorğusu)'))
-    : (state.lang==='en' ? 'Otakuvid proxy mode restored' : (state.lang==='tr' ? 'Otakuvid proxy moda döndü' : 'Otakuvid proxy rejiminə qayıdıldı')));
+    ? (state.lang==='en' ? 'Server 1 direct mode ON — segments stream straight from CDN (0 worker requests)'
+       : (state.lang==='tr' ? 'Sunucu 1 direkt AÇIK — segmentler CDN\'den (0 worker isteği)' : 'Sunucu 1 birbaşa AÇIQ — seqmentlər CDN-dən (0 worker sorğusu)'))
+    : (state.lang==='en' ? 'Server 1 proxy mode restored' : (state.lang==='tr' ? 'Sunucu 1 proxy moda döndü' : 'Sunucu 1 proxy rejiminə qayıdıldı')));
   const current = currentEpisodeNum;
   if(current){ playEpisode(current); }
 }
@@ -3076,8 +3094,8 @@ function renderSourcesTab(){
   const wrap = document.getElementById('sourceToggleList');
   if(!wrap) return;
   const rows = [
-    { key:'otakuvid', label:'Otakuvid', sub:'1-2 istek/bölüm — segmentler tarayıcıdan CDN\'e doğrudan gider' },
-    { key:'megavid', label:'Megavid', sub:'~325 istek/bölüm — segmentler worker /proxy üzerinden geçer' }
+    { key:'otakuvid', label:'Sunucu 1', sub:'Ana kaynak — direkt, segmentler tarayıcıdan CDN\'e doğrudan gider (0 worker isteği)' },
+    { key:'megavid', label:'Sunucu 2', sub:'Yedek — segmentler worker /proxy üzerinden geçer' }
   ];
   wrap.innerHTML = rows.map(r=>{
     const on = globalSources[r.key] !== false;
@@ -4722,8 +4740,8 @@ function showPlayerUnavailable(){
     : (state.lang==='tr' ? 'Her iki kaynak da başarısız oldu veya bu bölüm henüz yayında değil.'
        : 'Hər iki mənbə uğursuz oldu və ya bu bölüm hələ yayında deyil.');
   const retry = state.lang==='en' ? 'Retry' : (state.lang==='tr' ? 'Tekrar Dene' : 'Yenidən Cəhd');
-  const tryMegavid = state.lang==='en' ? 'Open in Megavid player'
-    : (state.lang==='tr' ? 'Megavid player\'da dene' : 'Megavid player-da sına');
+  const tryMegavid = state.lang==='en' ? 'Open in Server 2'
+    : (state.lang==='tr' ? 'Sunucu 2\'de dene' : 'Sunucu 2-də sına');
   ph.innerHTML = `<svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#E05252" stroke-width="1.6"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 9l5 3-5 3z"/></svg>` +
     `<div class="ph-text" style="font-size:13px;color:#E8B84B;">${t1}</div>` +
     `<div class="ph-text" style="font-size:12px;color:#8B8F9C;">${t2}</div>` +
@@ -5171,9 +5189,9 @@ function attachHlsErrorRecovery(hls, vid){
     const fallbackToMegavid = ()=>{
       if(currentSourceLabel === 'otakuvid' && currentEpisodeNum && currentDetail){
         markSourceBroken(currentDetail.id, currentEpisodeNum);
-        showPlayerToast((state.lang==='en' ? 'Otakuvid failed — switching to Megavid'
-          : (state.lang==='tr' ? 'Otakuvid başarısız — Megavid\'e geçiliyor'
-             : 'Otakuvid uğursuz oldu — Megavid\'ə keçilir')));
+        showPlayerToast((state.lang==='en' ? 'Server 1 failed — switching to Server 2'
+          : (state.lang==='tr' ? 'Sunucu 1 başarısız — Sunucu 2\'ye geçiliyor'
+             : 'Sunucu 1 uğursuz oldu — Sunucu 2\'yə keçilir')));
         loadMegavidSourceIfNeeded(document.getElementById('playerFrame'), currentDetail, currentEpisodeNum).then(()=>{});
         return true;
       }
@@ -5407,8 +5425,8 @@ function buildPlayerSettingsPanel(src){
     const pref = state.sourcePref || 'auto';
     const opts = [
       { v:'auto',    label: state.lang==='en'?'Auto':(state.lang==='tr'?'Otomatik':'Avtomatik') },
-      { v:'anineko', label:'Otakuvid' },
-      { v:'megavid', label:'Megavid' }
+      { v:'anineko', label:'Sunucu 1' },
+      { v:'megavid', label:'Sunucu 2' }
     ];
     srcWrap.innerHTML = opts.map(o=>`
       <button class="option-pill ${pref===o.v?'active':''}" onclick="setSourcePref('${o.v}')">${o.label}</button>
@@ -5451,6 +5469,10 @@ function buildPlayerSettingsPanel(src){
   } else {
     subRow.classList.add('hidden');
   }
+
+  // Altyazı stili: boyut / renk / arka plan (yalnızca altyazı aktifse göster).
+  applySubtitleStyle();
+  renderSubtitleStyleControls();
 
   // Playback speed — works for direct/HLS <video>, not applicable to YouTube iframe embeds.
   const sWrap = document.getElementById('speedOptions');
@@ -5589,6 +5611,54 @@ function switchSubtitle(index){
   if(subWrap){
     Array.from(subWrap.children).forEach((b,i)=>b.classList.toggle('active', i === index + 1));
   }
+}
+
+// Altyazı görünümü — CSS değişkenlerini video elemanına uygular (::cue üzerinden okunur).
+function applySubtitleStyle(){
+  const vid = document.getElementById('mainVideoEl');
+  const root = vid || document.body;
+  root.style.setProperty('--cue-size', (state.subSize || 1.5) + 'em');
+  root.style.setProperty('--cue-color', state.subColor || '#ffffff');
+  root.style.setProperty('--cue-bg', 'rgba(0,0,0,' + (state.subBg == null ? 0.7 : state.subBg) + ')');
+}
+function subtitlePill(active, big){
+  return 'class="option-pill ' + (active ? 'active' : '') + '" style="' + (big ? 'font-size:' + big + ';' : '') + '"';
+}
+function renderSubtitleStyleControls(){
+  const wrap = document.getElementById('subtitleStyleRow');
+  const vid = document.getElementById('mainVideoEl');
+  if(!wrap || !vid){ return; }
+  if(!document.getElementById('mainVideoEl').textTracks || currentSubtitleTracks.length === 0){
+    wrap.classList.add('hidden');
+    return;
+  }
+  wrap.classList.remove('hidden');
+  const sizes = [
+    { v: 1.0, label: 'S', big:'12px' },
+    { v: 1.4, label: 'M', big:'16px' },
+    { v: 1.8, label: 'L', big:'20px' }
+  ];
+  document.getElementById('subSizeOptions').innerHTML =
+    '<div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">Boyut</div>' +
+    sizes.map(s=>`<button class="option-pill ${state.subSize===s.v?'active':''}" onclick="setSubStyle('subSize', ${s.v})">${s.label}</button>`).join('');
+  const colors = ['#ffffff','#ffff00','#00e5ff','#ff9dbe'];
+  document.getElementById('subColorOptions').innerHTML =
+    '<div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">Renk</div>' +
+    colors.map(c=>`<button class="option-pill ${state.subColor===c?'active':''}" style="width:26px;height:26px;background:${c};border-color:${state.subColor===c?'var(--accent)':'transparent'};" onclick="setSubStyle('subColor','${c}')" title="${c}"></button>`).join('');
+  const bgs = [
+    { v: 0,    label: 'Şeffaf' },
+    { v: 0.45, label: 'Hafif' },
+    { v: 0.7,  label: 'Koyu' }
+  ];
+  document.getElementById('subBgOptions').innerHTML =
+    '<div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">Arka plan</div>' +
+    bgs.map(b=>`<button class="option-pill ${state.subBg===b.v?'active':''}" onclick="setSubStyle('subBg',${b.v})">${b.label}</button>`).join('');
+}
+function setSubStyle(key, val){
+  state[key] = val;
+  saveSettings();
+  applySubtitleStyle();
+  renderSubtitleStyleControls();
 }
 
 // Maps in-app page names to clean URL paths, and back. This lets the browser's
