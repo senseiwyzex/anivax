@@ -145,6 +145,11 @@ async function handleProxy(request, url) {
     "anizara.store",
     "vivibebe.site",
     "bibiemb.xyz",
+    // vivibebe (bibiemb) segmentleri ByteDance'in p16-ad-sg.ibyteimg.com CDN'inden
+    // gelir. Segmentler "/obj/..." altında olduğundan /public/stream imzası
+    // tutmaz; host'u açıkça izinlemek gerekir.
+    "ibyteimg.com",
+    "byteimg.com",
   ];
   let targetUrl;
   try {
@@ -455,26 +460,38 @@ async function handleAninekoSource(request, url) {
     const pageHtml = await pageRes.text();
     const dataVideos = [...pageHtml.matchAll(/data-video="([^"]+)"/g)].map((m) => m[1]);
 
+    // Her kaynak ailesi için watch sayfasında İKİ düğme vardır:
+    //   1) SOFT (clean video + VTT overlay): URL'de `?caption_N=<.vtt>` /
+    //      `?sub=<.vtt>` param var → istediğimiz anayol (alt yazı VTT'den gelir).
+    //   2) PLAIN: parametresiz → hardsub encode olabilir (alttiyazi çekilmiş).
+    // `pick` her zaman SOFT varyantı seçer; soft yoksa ancak ilk/plain'e döner.
+    const isSoftUrl = (u) => /\?(caption_?[0-9]*=|sub=|sub_|c[0-9]_|s[0-9]_)/.test(u);
     const pick = (hostPattern, hint) => {
       const family = dataVideos.filter((u) => hostPattern.test(u));
       if (family.length === 0) return null;
-      const withHint = family.find((u) => hint && u.includes(hint));
-      // Prefer the softsub variant (caption/sub params); else take the first.
-      return withHint || family.find((u) => /\?(sub|caption_|sub_|c[0-9]_)/.test(u)) || family[0];
+      const hinted = hint ? family.find((u) => u.includes(hint)) : null;
+      const soft = family.find(isSoftUrl) || hinted;
+      const chosen = soft || family[0];
+      return { url: chosen, soft: !!soft };
     };
 
-    const bibiembUrl = pick(/^https:\/\/vivibebe\.site\//i, "sub=");
-    const otakuhgUrl = pick(/^https:\/\/otakuhg\.site\/e\//i, null);
-    const otakuvidUrl = pick(/^https:\/\/otakuvid\.online\/embed\//i, "caption_");
+    const bibiembPick = pick(/^https:\/\/vivibebe\.site\//i, "sub=");
+    const otakuhgPick = pick(/^https:\/\/otakuhg\.site\/e\//i, null);
+    const otakuvidPick = pick(/^https:\/\/otakuvid\.online\/embed\//i, "caption_");
+    const input = {
+      bibiemb: { url: bibiembPick && bibiembPick.url, soft: !!(bibiembPick && bibiembPick.soft) },
+      otakuhg: { url: otakuhgPick && otakuhgPick.url, soft: !!(otakuhgPick && otakuhgPick.soft) },
+      otakuvid: { url: otakuvidPick && otakuvidPick.url, soft: !!(otakuvidPick && otakuvidPick.soft) },
+    };
 
     // 2) Family resolvers, keyed exactly like the source labels the UI sends.
     //    When `only` (a ?source= param) is set we resolve a single family — the
     //    user's explicit choice. Resolving an unselected server would leak that
     //    request out, so unselected families are never touched.
     const resolvers = {
-      bibiemb: () => resolveBibiemb(bibiembUrl, pageUrl),
-      otakuhg: () => resolvePackedEmbed(otakuhgUrl, pageUrl),
-      otakuvid: () => resolvePackedEmbed(otakuvidUrl, pageUrl),
+      bibiemb: () => resolveBibiemb(input["bibiemb"].url, pageUrl),
+      otakuhg: () => resolvePackedEmbed(input["otakuhg"].url, pageUrl),
+      otakuvid: () => resolvePackedEmbed(input["otakuvid"].url, pageUrl),
     };
     const pending = wantSources
       ? Object.fromEntries(wantSources.map((k) => [k, resolvers[k]()]))
@@ -503,14 +520,16 @@ async function handleAninekoSource(request, url) {
       tracks.push({ file, label: m2[2], lang: "en" });
     }
 
-    // Sıralama önemli: Otakuhg en hızlı/güvenilir aile → Sunucu 1. Bibiemb
-    // (vivibebe) ortada, Otakuvid son sırada (Sunucu 3). Kullanıcı bu sırayı
-    // istedi: en hızlı kaynak birinci, otakuvid üçüncü.
+    // Sıralama: SOFT (VTT'li kesin çizgi) varyantlar önce → hardsub-protected
+    // encode'lara takılmak yerine alt yazısı VTT'den gelen clean kaynak seçilir.
+    // Aralarında eşitse hızlılık sırası korunur (otakuhg → bibiemb → otakuvid).
     const sources = [
-      { key: "otakuhg", name: "Otakuhg", source: otakuhg },
-      { key: "bibiemb", name: "Bibiemb", source: bibiemb },
-      { key: "otakuvid", name: "Otakuvid", source: otakuvid },
-    ].filter((s) => s.source);
+      { key: "otakuhg", name: "Otakuhg", source: otakuhg, soft: input["otakuhg"].soft },
+      { key: "bibiemb", name: "Bibiemb", source: bibiemb, soft: input["bibiemb"].soft },
+      { key: "otakuvid", name: "Otakuvid", source: otakuvid, soft: input["otakuvid"].soft },
+    ]
+      .filter((s) => s.source)
+      .sort((a, b) => (b.soft ? 1 : 0) - (a.soft ? 1 : 0));
 
     if (sources.length === 0) {
       return new Response(
