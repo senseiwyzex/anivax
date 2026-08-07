@@ -335,6 +335,48 @@ function unpackPacker(packed) {
   return out;
 }
 
+// Shared extraction for the otakuvid-family embed pages (otakuvid.online/embed/<id>
+// and otakuhg.site/e/<id>). Both ship their player config inside a Dean Edwards
+// packed script; the hlsN entries carry the playable masked-CDN master.
+async function resolvePackedEmbed(embedUrl, pageUrl) {
+  if (!embedUrl) return null;
+  const embedRes = await edgeFetch(embedUrl, { referer: pageUrl });
+  const embedHtml = await embedRes.text();
+  const packerStart = embedHtml.indexOf("eval(function(p,a,c,k,e,d)");
+  const newline = embedHtml.indexOf("\n", packerStart);
+  if (packerStart < 0 || newline < 0) return null;
+  const packed = embedHtml.slice(packerStart, newline);
+  const decoded = unpackPacker(packed);
+  if (!decoded) return null;
+  const linkMatch = [...decoded.matchAll(/"hls[0-9]":"([^"]+)"/g)].map((m2) => m2[1]);
+  // Prefer the masked-CDN master (playlist = master.txt) that serves directly;
+  // fall back to the tokenized -cdn.com link, then to whatever is present.
+  const masked =
+    linkMatch.find((l) => /master\.txt/i.test(l) && /\.(?:cfd|space|site|top)\b/i.test(l)) ||
+    linkMatch.find((l) => /master\.txt/i.test(l) || /wcfpc8/i.test(l));
+  const cdn = linkMatch.find((l) => l.includes("acek-cdn.com") || l.includes("-cdn.com"));
+  return masked || cdn || linkMatch[0] || null;
+}
+
+// bibiemb's data-video URL (bibiemb.xyz/<hash>) IS the master playlist itself —
+// it returns an m3u8 whose variant children live on the vibevibe.workers.dev CDN
+// with CORS *. We verify it's really a playlist and strip any ?sub= hint (the
+// subtitle VTT is attached separately).
+async function resolveBibiemb(dataVideoUrl, pageUrl) {
+  if (!dataVideoUrl) return null;
+  const clean = dataVideoUrl.split("?")[0];
+  try {
+    const res = await edgeFetch(clean, { referer: pageUrl });
+    if (res.ok) {
+      const ct = res.headers.get("Content-Type") || "";
+      if (/mpegurl|mpeg|text\/plain/i.test(ct)) return clean;
+      const body = await res.clone().text().catch(() => "");
+      if (body.trim().startsWith("#EXTM3U")) return clean;
+    }
+  } catch (e) { /* fall through */ }
+  return null;
+}
+
 async function handleAninekoSource(request, url) {
   let slug = url.searchParams.get("slug");
   const title = url.searchParams.get("title");
@@ -369,56 +411,39 @@ async function handleAninekoSource(request, url) {
       slug = chosen.url.replace(/^\/watch\//, "").replace(/\/.*$/, "");
     }
 
-    // 1) Fetch the Anineko watch page, find the otakuvid embed (prefer the one
-    //    carrying the soft-subtitle caption_1 param).
+    // 1) Fetch the Anineko watch page and collect every server button it
+    //    exposes (data-video=...), grouped into the three families the site
+    //    actually uses: bibiemb, otakuhg and otakuvid.
     const pageUrl = `${ANINEKO_BASE}/watch/${encodeURIComponent(slug)}/ep-${ep}`;
     const pageRes = await edgeFetch(pageUrl, { referer: ANINEKO_BASE + "/" });
     const pageHtml = await pageRes.text();
-    const embeds = [...pageHtml.matchAll(
-      /https:\/\/otakuvid\.online\/embed\/([a-z0-9]+)(\?[^"']*)?/g,
-    )].map((m) => ({ id: m[1], query: m[2] || "" }));
+    const dataVideos = [...pageHtml.matchAll(/data-video="([^"]+)"/g)].map((m) => m[1]);
 
-    // Prefer an embed with an explicit caption (softsub); fall back to any.
-    const preferred = embeds.find((e) => e.query.includes("caption_")) || embeds[0];
-    if (!preferred) {
-      return new Response(
-        JSON.stringify({ status: "error", message: "No otakuvid embed found", retryable: false }),
-        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
-      );
-    }
+    const pick = (hostPattern, hint) => {
+      const family = dataVideos.filter((u) => hostPattern.test(u));
+      if (family.length === 0) return null;
+      const withHint = family.find((u) => hint && u.includes(hint));
+      // Prefer the softsub variant (caption/sub params); else take the first.
+      return withHint || family.find((u) => /\?(sub|caption_|sub_|c[0-9]_)/.test(u)) || family[0];
+    };
 
-    // 2) Fetch the embed page; it contains a packed script with the HLS links.
-    const embedRes = await edgeFetch(OTAKUVID_BASE + "/embed/" + preferred.id, {
-      referer: pageUrl,
-    });
-    const embedHtml = await embedRes.text();
-    const packerStart = embedHtml.indexOf("eval(function(p,a,c,k,e,d)");
-    // Packer ends with '...KSTR')))\n</script> — take everything from the start
-    // of the eval to the first newline so we hand unpackPacker the full script.
-    const newline = embedHtml.indexOf("\n", packerStart);
-    let m3u8 = null;
-    if (packerStart > -1 && newline > -1) {
-      const packed = embedHtml.slice(packerStart, newline);
-      const decoded = unpackPacker(packed);
-      if (decoded) {
-        // hls2/hls3/hls4 links appear as "hlsN":"<url>" inside the config.
-        // hls3 lives on the masked ".cfd" host (playlist = master.txt) and is the
-        // one that serves directly; dramiyos-cdn.com requires a locked token.
-        const linkMatch = [...decoded.matchAll(/"hls[0-9]":"([^"]+)"/g)].map((m2) => m2[1]);
-        const cfd = linkMatch.find((l) => l.includes(".cfd")) ||
-                    linkMatch.find((l) => l.includes("wcfpc8") || l.includes("master.txt"));
-        const cdn = linkMatch.find((l) => l.includes("acek-cdn.com") || l.includes("-cdn.com"));
-        m3u8 = cfd || cdn || linkMatch[0] || null;
-      }
-    }
-    if (!m3u8) {
-      return new Response(
-        JSON.stringify({ status: "error", message: "Could not extract m3u8 from embed", retryable: true }),
-        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
-      );
-    }
+    const bibiembUrl = pick(/^https:\/\/bibiemb\.xyz\//i, "sub=");
+    const otakuhgUrl = pick(/^https:\/\/otakuhg\.site\/e\//i, null);
+    const otakuvidUrl = pick(/^https:\/\/otakuvid\.online\/embed\//i, "caption_");
 
-    // 3) Collect subtitle tracks from the watch page (caption_1 VTT links).
+    // 2) Resolve every family in parallel. bibiemb's data-video URL is the
+    //    master playlist itself; otakuhg/otakuvid are packed embeds resolved by
+    //    the shared extractor. All run concurrently, so this still costs ONE
+    //    frontend request per episode.
+    const [bibiemb, otakuhg, otakuvid] = await Promise.all([
+      resolveBibiemb(bibiembUrl, pageUrl),
+      resolvePackedEmbed(otakuhgUrl, pageUrl),
+      resolvePackedEmbed(otakuvidUrl, pageUrl),
+    ]);
+
+    // 3) Subtitle tracks from the watch page (caption_N VTT links). Every
+    //    family's softsub variant references the same cdn.anizara.store VTTs, so
+    //    the tracks below apply to each resolved source.
     const tracks = [];
     const seen = new Set();
     for (const m2 of pageHtml.matchAll(/caption_[0-9]=([^&"']+\.vtt)[^"']*&sub_[0-9]=([^&"']+)/g)) {
@@ -428,12 +453,31 @@ async function handleAninekoSource(request, url) {
       tracks.push({ file, label: m2[2], lang: "en" });
     }
 
+    const sources = [
+      { key: "bibiemb", name: "Bibiemb", source: bibiemb },
+      { key: "otakuhg", name: "Otakuhg", source: otakuhg },
+      { key: "otakuvid", name: "Otakuvid", source: otakuvid },
+    ].filter((s) => s.source);
+
+    if (sources.length === 0) {
+      return new Response(
+        JSON.stringify({ status: "error", message: "No playable source found", retryable: false }),
+        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+
     return new Response(
       JSON.stringify({
         status: "ok",
-        source: m3u8,
+        source: sources[0].source,
+        sources,
         tracks,
-        meta: { slug, episode: parseInt(ep, 10) || 1, lang: "sub" },
+        meta: {
+          slug,
+          episode: parseInt(ep, 10) || 1,
+          lang: "sub",
+          sourceName: sources.map((s) => s.name).join(" + "),
+        },
       }),
       { headers: corsHeaders({ "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" }) },
     );
