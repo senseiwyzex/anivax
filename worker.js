@@ -135,6 +135,8 @@ async function handleProxy(request, url) {
     "acek-cdn.com",
     "dramiyos-cdn.com",
     "anizara.store",
+    "vivibebe.site",
+    "bibiemb.xyz",
   ];
   let targetUrl;
   try {
@@ -148,8 +150,10 @@ async function handleProxy(request, url) {
   // m5QqjwpATPzb.infrastructureportal.site ...). We can't enumerate them, so
   // instead of trusting the host we accept streams whose path carries the
   // otakuvid HLS signature (/hls3/ or /hls/) — playlists, segments and
-  // iframe/variant lists all live under those paths.
-  const isOtakuvidStream = /\/hls3?\//i.test(targetUrl.pathname);
+  // iframe/variant lists all live under those paths. Same for the
+  // bibiemb/vivibebe direct-master family (/public/stream/.../master.m3u8).
+  const isOtakuvidStream = /\/hls3?\//i.test(targetUrl.pathname) ||
+    /^\/public\/stream\//i.test(targetUrl.pathname);
   const hostAllowed =
     ALLOWED_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
     isOtakuvidStream;
@@ -358,21 +362,24 @@ async function resolvePackedEmbed(embedUrl, pageUrl) {
   return masked || cdn || linkMatch[0] || null;
 }
 
-// bibiemb's data-video URL (bibiemb.xyz/<hash>) IS the master playlist itself —
-// it returns an m3u8 whose variant children live on the vibevibe.workers.dev CDN
-// with CORS *. We verify it's really a playlist and strip any ?sub= hint (the
-// subtitle VTT is attached separately).
+// bibiemb family: the data-video URL is a VibePlayer page (vivibebe.site/<hash>)
+// whose HTML embeds the real master at /public/stream/<hash>/master.m3u8. A few
+// older direct-master hosts (bibiemb.xyz/<hash>) return the playlist outright.
+// We handle both and strip any ?sub= hint (the subtitle VTT is attached
+// separately on the frontend).
 async function resolveBibiemb(dataVideoUrl, pageUrl) {
   if (!dataVideoUrl) return null;
   const clean = dataVideoUrl.split("?")[0];
   try {
     const res = await edgeFetch(clean, { referer: pageUrl });
-    if (res.ok) {
-      const ct = res.headers.get("Content-Type") || "";
-      if (/mpegurl|mpeg|text\/plain/i.test(ct)) return clean;
-      const body = await res.clone().text().catch(() => "");
-      if (body.trim().startsWith("#EXTM3U")) return clean;
-    }
+    if (!res.ok) return null;
+    const ct = res.headers.get("Content-Type") || "";
+    if (/mpegurl|mpeg/i.test(ct)) return clean;
+    const body = await res.text().catch(() => "");
+    if (body.trim().startsWith("#EXTM3U")) return clean;
+    // VibePlayer page → extract the absolute master.m3u8 link.
+    const master = body.match(/https?:\/\/[^"'\s>]*master\.m3u8[^"'\s>]*/i);
+    if (master) return master[0].split("?")[0];
   } catch (e) { /* fall through */ }
   return null;
 }
@@ -427,7 +434,7 @@ async function handleAninekoSource(request, url) {
       return withHint || family.find((u) => /\?(sub|caption_|sub_|c[0-9]_)/.test(u)) || family[0];
     };
 
-    const bibiembUrl = pick(/^https:\/\/bibiemb\.xyz\//i, "sub=");
+    const bibiembUrl = pick(/^https:\/\/vivibebe\.site\//i, "sub=");
     const otakuhgUrl = pick(/^https:\/\/otakuhg\.site\/e\//i, null);
     const otakuvidUrl = pick(/^https:\/\/otakuvid\.online\/embed\//i, "caption_");
 
@@ -453,9 +460,12 @@ async function handleAninekoSource(request, url) {
       tracks.push({ file, label: m2[2], lang: "en" });
     }
 
+    // Sıralama önemli: Otakuhg en hızlı/güvenilir aile → Sunucu 1. Bibiemb
+    // (vivibebe) ortada, Otakuvid son sırada (Sunucu 3). Kullanıcı bu sırayı
+    // istedi: en hızlı kaynak birinci, otakuvid üçüncü.
     const sources = [
-      { key: "bibiemb", name: "Bibiemb", source: bibiemb },
       { key: "otakuhg", name: "Otakuhg", source: otakuhg },
+      { key: "bibiemb", name: "Bibiemb", source: bibiemb },
       { key: "otakuvid", name: "Otakuvid", source: otakuvid },
     ].filter((s) => s.source);
 
