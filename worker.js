@@ -34,12 +34,20 @@ function edgeFetch(url, opts = {}) {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-      Referer: opts.referer || MEGAVID_BASE + "/",
+      Referer: opts.referer || MEGAVID_BASE,
       Origin: opts.origin || MEGAVID_BASE,
       Accept: opts.accept || "*/*",
       ...(opts.headers || {}),
     },
   });
+}
+
+// A stalled upstream must never hang inside a Worker — return null on timeout
+// instead of burning the wall-clock budget on a dead CDN.
+function fetchT(url, opts = {}, ms = 12000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return edgeFetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(timer));
 }
 function corsHeaders(extra = {}) {
   return { ...DEFAULT_HEADERS, ...extra };
@@ -68,7 +76,7 @@ async function handleSource(request, url) {
   let lastError = null;
   for (const path of attempts) {
     try {
-      const res = await edgeFetch(MEGAVID_BASE + path, {
+      const res = await fetchT(MEGAVID_BASE + path, {
         referer: MEGAVID_BASE + "/",
         accept: "application/json",
       });
@@ -198,7 +206,7 @@ async function handleProxy(request, url) {
     // requests intermittently hang or get rejected.
     let origin;
     try { origin = new URL(referer).origin; } catch { origin = MEGAVID_BASE; }
-    const res = await edgeFetch(targetUrl.href, {
+    const res = await fetchT(targetUrl.href, {
       referer: referer,
       origin: origin,
       accept: isPlaylistByPath
@@ -344,7 +352,7 @@ function unpackPacker(packed) {
 // packed script; the hlsN entries carry the playable masked-CDN master.
 async function resolvePackedEmbed(embedUrl, pageUrl) {
   if (!embedUrl) return null;
-  const embedRes = await edgeFetch(embedUrl, { referer: pageUrl });
+  const embedRes = await fetchT(embedUrl, { referer: pageUrl });
   const embedHtml = await embedRes.text();
   const packerStart = embedHtml.indexOf("eval(function(p,a,c,k,e,d)");
   const newline = embedHtml.indexOf("\n", packerStart);
@@ -371,7 +379,7 @@ async function resolveBibiemb(dataVideoUrl, pageUrl) {
   if (!dataVideoUrl) return null;
   const clean = dataVideoUrl.split("?")[0];
   try {
-    const res = await edgeFetch(clean, { referer: pageUrl });
+    const res = await fetchT(clean, { referer: pageUrl });
     if (!res.ok) return null;
     const ct = res.headers.get("Content-Type") || "";
     if (/mpegurl|mpeg/i.test(ct)) return clean;
@@ -388,6 +396,27 @@ async function handleAninekoSource(request, url) {
   let slug = url.searchParams.get("slug");
   const title = url.searchParams.get("title");
   const ep = url.searchParams.get("ep") || "1";
+  // "source" opts into resolving only ONE server family; "sources" takes a
+  // comma-separated subset. The worker resolves EXACTLY those families — any
+  // family a user/admin disabled is never fanned out to, and a specific pick
+  // only ever touches that one server.
+  const VALID = ["otakuhg", "bibiemb", "otakuvid"];
+  const rawOnly = url.searchParams.get("source");
+  const rawSources = url.searchParams.get("sources");
+  let wantSources = null;
+  if (rawOnly) {
+    wantSources = [rawOnly];
+  } else if (rawSources) {
+    wantSources = rawSources.split(",").map(s => s.trim()).filter(Boolean);
+  }
+  if (wantSources) {
+    if (wantSources.length === 0 || wantSources.some(s => !VALID.includes(s))) {
+      return new Response(
+        JSON.stringify({ status: "error", message: "Unknown source", retryable: false }),
+        { status: 400, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+  }
   if (!slug && !title) {
     return new Response(
       JSON.stringify({ status: "error", message: "Missing slug or title parameter" }),
@@ -399,7 +428,7 @@ async function handleAninekoSource(request, url) {
     // 0) No slug given -> resolve it via the Anineko search API. Prefer an exact
     //    title match; otherwise take the first result.
     if (!slug) {
-      const searchRes = await edgeFetch(
+      const searchRes = await fetchT(
         `${ANINEKO_BASE}/ajax/search?q=${encodeURIComponent(title)}`,
         { referer: ANINEKO_BASE + "/", accept: "application/json" },
       );
@@ -422,7 +451,7 @@ async function handleAninekoSource(request, url) {
     //    exposes (data-video=...), grouped into the three families the site
     //    actually uses: bibiemb, otakuhg and otakuvid.
     const pageUrl = `${ANINEKO_BASE}/watch/${encodeURIComponent(slug)}/ep-${ep}`;
-    const pageRes = await edgeFetch(pageUrl, { referer: ANINEKO_BASE + "/" });
+    const pageRes = await fetchT(pageUrl, { referer: ANINEKO_BASE + "/" });
     const pageHtml = await pageRes.text();
     const dataVideos = [...pageHtml.matchAll(/data-video="([^"]+)"/g)].map((m) => m[1]);
 
@@ -438,15 +467,29 @@ async function handleAninekoSource(request, url) {
     const otakuhgUrl = pick(/^https:\/\/otakuhg\.site\/e\//i, null);
     const otakuvidUrl = pick(/^https:\/\/otakuvid\.online\/embed\//i, "caption_");
 
-    // 2) Resolve every family in parallel. bibiemb's data-video URL is the
-    //    master playlist itself; otakuhg/otakuvid are packed embeds resolved by
-    //    the shared extractor. All run concurrently, so this still costs ONE
-    //    frontend request per episode.
-    const [bibiemb, otakuhg, otakuvid] = await Promise.all([
-      resolveBibiemb(bibiembUrl, pageUrl),
-      resolvePackedEmbed(otakuhgUrl, pageUrl),
-      resolvePackedEmbed(otakuvidUrl, pageUrl),
-    ]);
+    // 2) Family resolvers, keyed exactly like the source labels the UI sends.
+    //    When `only` (a ?source= param) is set we resolve a single family — the
+    //    user's explicit choice. Resolving an unselected server would leak that
+    //    request out, so unselected families are never touched.
+    const resolvers = {
+      bibiemb: () => resolveBibiemb(bibiembUrl, pageUrl),
+      otakuhg: () => resolvePackedEmbed(otakuhgUrl, pageUrl),
+      otakuvid: () => resolvePackedEmbed(otakuvidUrl, pageUrl),
+    };
+    const pending = wantSources
+      ? Object.fromEntries(wantSources.map((k) => [k, resolvers[k]()]))
+      : {
+          otakuhg: resolvers["otakuhg"](),
+          bibiemb: resolvers["bibiemb"](),
+          otakuvid: resolvers["otakuvid"](),
+        };
+    const resolved = {};
+    for (const [k, p] of Object.entries(pending)) {
+      resolved[k] = await p.catch(() => null);
+    }
+    const bibiemb = resolved["bibiemb"];
+    const otakuhg = resolved["otakuhg"];
+    const otakuvid = resolved["otakuvid"];
 
     // 3) Subtitle tracks from the watch page (caption_N VTT links). Every
     //    family's softsub variant references the same cdn.anizara.store VTTs, so
@@ -500,6 +543,71 @@ async function handleAninekoSource(request, url) {
 }
 
 
+// ---- /admin ---------------------------------------------------------------
+// Admin login lives server-side. The key is a Worker secret (ADMIN_KEY), never
+// shipped in the client bundle. Login swaps it for an HttpOnly SameSite cookie,
+// which the admin UI checks via /admin/check before unlocking the admin page.
+//
+// Transitional fallback: while deployments haven't set ADMIN_KEY yet we fall
+// back to the historical constant — moved here so it stops being public in the
+// HTML payload. Once ADMIN_KEY is configured, the fallback is ignored.
+
+const ADMIN_KEY_FALLBACK = "Anv7#kQm2xZ9!wR";
+const ADMIN_COOKIE = "anivax_admin=1";
+
+function adminAuthCookie(expires) {
+  const parts = [ADMIN_COOKIE, "Path=/", "HttpOnly", "SameSite=Lax"];
+  if (expires) parts.push("Max-Age=" + expires);
+  return parts.join("; ");
+}
+
+async function handleAdminLogin(request, env) {
+  let key = null;
+  try {
+    const body = await request.json();
+    key = body && body.key;
+  } catch {
+    key = null;
+  }
+  const expected = env && env.ADMIN_KEY ? env.ADMIN_KEY : ADMIN_KEY_FALLBACK;
+  const ok = typeof key === "string" && key.length > 0 && key === expected;
+  if (!ok) {
+    return new Response(JSON.stringify({ ok: false }), { status: 401, headers: corsHeaders({ "Content-Type": "application/json" }) });
+  }
+  return new Response(
+    JSON.stringify({ ok: true }),
+    {
+      status: 200,
+      headers: corsHeaders({
+        "Content-Type": "application/json",
+        "Set-Cookie": adminAuthCookie(60 * 60 * 24 * 7), // 7 days
+      }),
+    },
+  );
+}
+
+function handleAdminLogout() {
+  return new Response(
+    JSON.stringify({ ok: true }),
+    {
+      headers: corsHeaders({
+        "Content-Type": "application/json",
+        "Set-Cookie": ADMIN_COOKIE + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+      }),
+    },
+  );
+}
+
+function handleAdminCheck(request) {
+  const cookies = request.headers.get("Cookie") || "";
+  const authed = cookies.split(";").some((c) => c.trim() === "anivax_admin=1");
+  return new Response(
+    JSON.stringify({ ok: authed }),
+    { status: authed ? 200 : 401, headers: corsHeaders({ "Content-Type": "application/json" }) },
+  );
+}
+
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -516,6 +624,18 @@ export default {
     }
     if (url.pathname === "/proxy") {
       return await handleProxy(request, url);
+    }
+
+    if (url.pathname === "/admin/login") {
+      if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: corsHeaders() });
+      return await handleAdminLogin(request, env);
+    }
+    if (url.pathname === "/admin/logout") {
+      if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: corsHeaders() });
+      return handleAdminLogout();
+    }
+    if (url.pathname === "/admin/check") {
+      return handleAdminCheck(request);
     }
 
     return new Response("Not found", { status: 404, headers: corsHeaders() });

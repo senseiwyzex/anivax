@@ -1,0 +1,20 @@
+# Cloudflare Worker yapılandırması
+# Deploy:
+#   npx wrangler login          # bir kez (tarayıcıdan hesabını onayla)
+#   npx wrangler deploy
+#   npx wrangler secret put ADMIN_KEY   # admin giriş anahtarını gir
+#
+# Worker adı, workers.dev alt adresini belirler:
+#   https://anivax-proxy.wyzexsensei.workers.dev
+
+name = "anivax-proxy"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Account id (hesabınıza özel — değiştirme):
+account_id = "29e014e1c825bb563934824318e8aaba"
+
+[observability]
+enabled = true

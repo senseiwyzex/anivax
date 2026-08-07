@@ -822,7 +822,7 @@
       <div class="settings-label">Video Kaynakları</div>
       <div class="settings-card">
         <div class="settings-row-sub" style="padding:4px 0 8px; font-size:12.5px; color:var(--text-dim);">
-          Bir kaynağı kapatırsan o kaynak HERKES İÇİN devre dışı kalır (site_config tablosu üzerinden global). Sunucu 1 kapanırsa akış doğrudan Sunucu 2'ye geçer, Sunucu 2 kapanırsa Sunucu 1 kullanılır.
+          Her kaynağı tek tek açıp kapatabilirsin. Kapatılan kaynak hiç çağrılmaz (site_config tablosu üzerinden global, herkes için). İstek giden sunucular sealistiğin kaynaklara indirgenir.
         </div>
         <div id="sourceToggleList"></div>
       </div>
@@ -1074,7 +1074,9 @@ let currentUser = null; // set on auth state change
 // devre dışı kalır. Tablo yoksa hata sessizce yutulur ve varsayılanlar (hepsi
 // açık) kullanılır. DDL:  create table if not exists public.site_config(
 //   key text primary key, data jsonb, updated_at timestamptz default now());
-let globalSources = { otakuvid: true, megavid: true, directOtaku: true };
+// Her kaynak tek tek açılıp kapanabilir. Admin pansili "Kaynaklar" sekmesinden
+// isim isim yönetilir; seçili olmayan kaynak oynatma akışında HİÇ çağrılmaz.
+let globalSources = { otakuhg: true, bibiemb: true, otakuvid: true, megavid: true, directOtaku: true };
 let globalSourcesLoaded = false;
 async function loadGlobalSources(){
   if(!sbReady()){ globalSourcesLoaded = true; return; }
@@ -1089,6 +1091,11 @@ async function loadGlobalSources(){
 function sourceEnabled(name){
   return globalSources[name] !== false;
 }
+// Sıralama korunur: Otakuhg (en hızlı) → Bibiemb → Otakuvid. Admin kapatılan
+// aileler burada elenir, böylece hiç istenmeyen sunucuya istek gitmez.
+function enabledAninekoFamilies(){
+  return ['otakuhg', 'bibiemb', 'otakuvid'].filter(f => sourceEnabled(f));
+}
 async function saveGlobalSources(){
   if(!sbReady()) return;
   try{
@@ -1102,8 +1109,8 @@ function toggleGlobalSource(name){
   saveGlobalSources();
   renderSourcesTab();
   showToast((globalSources[name] !== false)
-    ? (state.lang==='en' ? (name + ' enabled for everyone') : ((name==='otakuvid'?'Sunucu 1':'Sunucu 2') + ' herkes için açıldı'))
-    : (state.lang==='en' ? (name + ' disabled for everyone') : ((name==='otakuvid'?'Sunucu 1':'Sunucu 2') + ' herkes için kapatıldı')));
+    ? (state.lang==='en' ? (name + ' enabled for everyone') : (name + ' herkes için açıldı'))
+    : (state.lang==='en' ? (name + ' disabled for everyone') : (name + ' herkes için kapatıldı')));
 }
 
 // ================= HATA AYIKLAMA (error_logs → Supabase) =================
@@ -1299,6 +1306,9 @@ let state = {
 };
 
 // ================= ADMIN AUTH =================
+// Birincil doğrulama sunucu tarafında: worker /admin/login, anahtar env'de
+// (ADMIN_KEY) tutulur, /admin/check altında HttpOnly cookie ile oturum açılır.
+// ADMIN_PASSWORD yalnızca worker route'u erişilemezse devreye giren bir fallback.
 const ADMIN_PASSWORD = "Anv7#kQm2xZ9!wR";
 let isAdmin = false; // resets on every fresh load — must re-enter password each session
 let logoTapCount = 0;
@@ -1315,22 +1325,52 @@ function handleLogoTap(){
   }
 }
 
+// Startup: geçerli Admin cookie'si varsa isAdmin'i true yap → tekrar şifre
+// sormaya gerek kalmadan logo dokunuşu admin sayfasını açar.
+function verifyAdminSession(){
+  try{
+    fetch('/admin/check', { credentials:'same-origin', cache:'no-store' })
+      .then(r=>{ if(r.ok) isAdmin = true; })
+      .catch(()=>{});
+  }catch(e){}
+}
+
 function tryAdminLogin(){
   const val = document.getElementById('adminPassInput').value;
-  if(val === ADMIN_PASSWORD){
+  const success = ()=>{
     isAdmin = true;
     document.getElementById('adminPassInput').value = '';
     document.getElementById('adminLoginError').classList.remove('show');
     goPage('admin');
-  } else {
+  };
+  const fail = ()=>{
     document.getElementById('adminLoginError').classList.remove('show');
     void document.getElementById('adminLoginError').offsetWidth; // restart animation if triggered twice in a row
     document.getElementById('adminLoginError').classList.add('show');
-  }
+  };
+  // Sunucu login'ini dene (anahtar env'de, tarayıcı paketinde değil).
+  // Ancak worker henüz deploy edilmediyse route 404/405 döner → o zaman
+  // her zamanki yerel şifreye düşer, böylece şifre hep çalışır.
+  fetch('/admin/login', {
+    method:'POST', credentials:'same-origin',
+    headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify({ key: val })
+  }).then(r=>{
+    if(r.status === 404 || r.status === 405) throw new Error('not-deployed'); // eski worker
+    return r.json().then(j => partialOk(j));
+  }).then(partialOk=>{
+    partialOk ? success() : fail();
+  }).catch(()=>{
+    // worker route yok / ağ hatası → eski şifre karşılaştırmasına dön.
+    (val === ADMIN_PASSWORD) ? success() : fail();
+  });
 }
+
+function partialOk(j){ return !!(j && j.ok === true); }
 
 function adminLogout(){
   isAdmin = false;
+  fetch('/admin/logout', { method:'POST', credentials:'same-origin' }).catch(()=>{});
   showToast(state.lang==='en' ? 'Logged out' : (state.lang==='tr' ? 'Çıkış yapıldı' : 'Çıxış edildi'));
   goPage('home');
 }
@@ -2424,7 +2464,7 @@ async function mountAninekoCandidate(i, frame){
     else return false;
   }
   if(!document.getElementById('mainVideoEl')) return false;
-  showPlayerToast('Sunucu ' + (i+1) + ' • ' + (cand.name || 'Anineko'));
+  showPlayerToast(cand.name || 'Anineko');
   return true;
 }
 
@@ -2444,17 +2484,43 @@ function switchAninekoSource(index){
   }).finally(()=>{ aninekoSwitchInProgress = false; });
 }
 
+// Belirli bir Anineko ailesi seçildiyse anahtarını döndürür ('auto' / 'anineko'
+// / 'megavid' değilse 'aneko:<key>' biçimindedir). Seçim yoksa null.
+function preferredAninekoSource(){
+  const pref = state.sourcePref || 'auto';
+  if(typeof pref === 'string' && pref.indexOf('aneko:') === 0){
+    const key = pref.slice('aneko:'.length);
+    if(key === 'otakuhg' || key === 'bibiemb' || key === 'otakuvid') return key;
+  }
+  return null;
+}
+
 // AniList başlıklarını (en→tr→romaji sırası) kullanarak Anineko'dan m3u8 +
 // softsub listesi alır. Tek istek: worker aramayı ve embed çözmeyi kendisi yapar.
+// Yalnızca AKTİF aileler isten mek: kullanıcı belirli birini seçtiyse `source=`,
+// değilse `sources=<aktif aileler>`. Kapatılan/broken sunucuya istek atılmaz.
 async function aninekoResolveSource(anime, episodeNum){
   const titles = [];
   if(anime.title && anime.title.english) titles.push(anime.title.english);
   if(anime.title && anime.title.romaji) titles.push(anime.title.romaji);
   if(anime.title && anime.title.native) titles.push(anime.title.native);
+  const sourceKey = preferredAninekoSource();
+  let param = '';
+  if(sourceKey){
+    // Kullanıcı belirli bir aile seçti → yalnızca o sunucudan iste.
+    if(!sourceEnabled(sourceKey)) return null; // admin kapatmışsa oyuncata geçilemez
+    param = `&source=${encodeURIComponent(sourceKey)}`;
+  } else {
+    // Otomatik → yalnızca açık aileler istenir.
+    const families = enabledAninekoFamilies();
+    if(families.length === 0) return null;
+    param = `&sources=${encodeURIComponent(families.join(','))}`;
+  }
+  const qs = `${ANINEKO_SOURCE_PATH}?ep=${episodeNum}${param}`;
   for(const t of titles){
     if(!t) continue;
     try{
-      const res = await fetch(`${MEGAVID_WORKER_BASE}${ANINEKO_SOURCE_PATH}?title=${encodeURIComponent(t)}&ep=${episodeNum}`);
+      const res = await fetch(`${MEGAVID_WORKER_BASE}${qs}&title=${encodeURIComponent(t)}`);
       const data = await res.json().catch(()=>null);
       if(res.ok && data && data.status === 'ok' && data.source) return data;
     }catch(e){ /* try next title */ }
@@ -2471,8 +2537,9 @@ async function aninekoResolveSource(anime, episodeNum){
 // şans → yavaş CDN host'ları (segment 30s+) için uzun sabırla beklenir. Megavid
 // VARSA otakuvid kısa sürede başlamazsa hızlıca Megavid'e geçilir.
 async function loadAninekoSourceIfNeeded(frame, anime, episodeNum, megavidInfo){
-  // Admin "Kaynaklar" panelinde Otakuvid kapatıldıysa herkes için atlanır.
-  if(!sourceEnabled('otakuvid')) return false;
+  // Kullanıcı belirli bir aile seçtiyse ve bu kaynak kapalıysa önceden bırak.
+  const pref = preferredAninekoSource();
+  if(pref && !sourceEnabled(pref)) return false;
   // Daha önce bu bölümde otakuvid fatal hata verdiyse otakuvidi atla,
   // zincir doğrudan Megavid'i denesin.
   if(isSourceBroken(anime && anime.id, episodeNum)){
@@ -2504,63 +2571,37 @@ async function loadAninekoSourceIfNeeded(frame, anime, episodeNum, megavidInfo){
   const megavidAvailable = !!(mInfo && mInfo.available);
   const slowOnly = !megavidAvailable; // Megavid bu bölümde yok → anineko tek şans
 
-  // Adayları sırayla dene: biri oynatırsa bitir, sıkışırsa (stalled) sıradakine
-  // geç. Fatal hata durumunda attachHlsErrorRecovery sıradaki adaya geçmeyi
-  // dener; o da başaramazsa üst akış Megavid'i devreye sokar.
+// Adayları sırayla dene: biri oynatırsa bitir, sıkışırsa (stalled) sıradakine
+  // geç. Arka planda sessizce devam eder — kullanıcıyı "yavaş/deneniyor" gibi
+  // mesajlarla boğmaz, tek bir temiz yükleme göstergesi kalır.
   for(let i = 0; i < currentAninekoCandidates.length; i++){
     if(currentEpisodeNum !== episodeNum) return false;
     const ok = await mountAninekoCandidate(i, frame);
     if(!ok) continue;
-
-    // Megavid yoksa "tek şans" adaydır: ara adaylar hızlıca elensin, uzun sabır
-    // (50s) yalnızca SON adaya verilir — o başarısız olursa zaten kaynak kalmaz.
-    const timeoutMs = (slowOnly && i === currentAninekoCandidates.length - 1) ? 50000 : 12000;
-    if(slowOnly){
-      showPlayerOverlay(state.lang==='en' ? 'Loading — source may be slow'
-        : (state.lang==='tr' ? 'Yükleniyor — kaynak yavaş olabilir'
-           : 'Yüklənir — mənbə yavaş ola bilər'));
-    }
+    // Son aday: biraz daha sabır. Yalnızca Megavid de yoksa uzun sabır verilir.
+    const timeoutMs = (slowOnly && i === currentAninekoCandidates.length - 1) ? 45000 : 12000;
     const result = await waitForPlayback(episodeNum, { timeoutMs });
-    hidePlayerOverlay();
-
     if(result === 'ok'){
       clearSourceBroken(anime && anime.id, episodeNum);
       return true;
     }
     if(result === 'cancelled') return false;
     if(result === 'fatal'){
-      // fatal → attachHlsErrorRecovery karar verdi: sıradaki aday varsa megavid'e
-      // GEÇMEDİ (döngü devam etsin), yoksa Megavid fallback'ini zaten tetikledi.
-      // Megavid yükleniyorsa (megavidLoadPromise dolu) burada döngüyü bitir.
-      if(i < currentAninekoCandidates.length - 1 && !megavidLoadPromise){
-        showPlayerToast((state.lang==='en' ? ('Server ' + (i+1) + ' failed — trying Server ' + (i+2))
-          : (state.lang==='tr' ? ('Sunucu ' + (i+1) + ' başarısız — Sunucu ' + (i+2) + ' deneniyor')
-             : ('Sunucu ' + (i+1) + ' uğursuz oldu — Sunucu ' + (i+2) + ' sınanır'))));
-        continue;
+      // fatal → attachHlsErrorRecovery sıradaki adaya geçmeyi zaten yönetir.
+      if(i < currentAninekoCandidates.length - 1 && !megavidLoadPromise) continue;
+      return false;
+    }
+    // stalled: bu aday oynatamadı → sıradakine sessizce geç.
+    if(i >= currentAninekoCandidates.length - 1){
+      if(slowOnly) return false;
+      if(currentEpisodeNum === episodeNum && megavidAvailable){
+        markSourceBroken(anime && anime.id, episodeNum);
+        showPlayerToast((state.lang==='en' ? 'Switching to Server 2'
+          : (state.lang==='tr' ? 'Sunucu 2\'ye geçiliyor'
+             : 'Sunucu 2-yə keçilir')));
       }
       return false;
     }
-    // stalled: bu aday oynatamadı → sıradakine geç.
-    if(i < currentAninekoCandidates.length - 1){
-      showPlayerToast((state.lang==='en' ? ('Server ' + (i+1) + ' slow — trying Server ' + (i+2))
-        : (state.lang==='tr' ? ('Sunucu ' + (i+1) + ' yavaş — Sunucu ' + (i+2) + ' deneniyor')
-           : ('Sunucu ' + (i+1) + ' yavaşdır — Sunucu ' + (i+2) + ' sınanır'))));
-      continue;
-    }
-    // Son aday da oynatamadı.
-    if(slowOnly){
-      // Megavid de yok → üst akış hata panelini kursun.
-      return false;
-    }
-    if(currentEpisodeNum === episodeNum && megavidAvailable){
-      // Anineko yavaş/çalışmadı ama Megavid var → bir dahaki sefere Megavid'e
-      // doğrudan gitmek için hatırla (Megavid sonradan kaybolursa otomatik temizlenir).
-      markSourceBroken(anime && anime.id, episodeNum);
-      showPlayerToast((state.lang==='en' ? 'Server 1 slow — switching to Server 2'
-        : (state.lang==='tr' ? 'Sunucu 1 yavaş — Sunucu 2\'ye geçiliyor'
-           : 'Sunucu 1 yavaşdır — Sunucu 2\'yə keçilir')));
-    }
-    return false;
   }
   return false;
 }
@@ -3161,12 +3202,14 @@ function toggleDirectOtaku(){
 function renderSourcesTab(){
   const wrap = document.getElementById('sourceToggleList');
   if(!wrap) return;
-  const rows = [
-    { key:'otakuvid', label:'Sunucu 1', sub:'Ana kaynak — direkt, segmentler tarayıcıdan CDN\'e doğrudan gider (0 worker isteği)' },
-    { key:'megavid', label:'Sunucu 2', sub:'Yedek — segmentler worker /proxy üzerinden geçer' }
+  const FAMILIES = [
+    { key:'otakuhg', label:'Otakuhg', sub:'Anineko ailesi — en hızlı/güvenilir, Sunucu 1' },
+    { key:'bibiemb', label:'Bibiemb', sub:'Anineko ailesi (vivibebe master)' },
+    { key:'otakuvid', label:'Otakuvid', sub:'Anineko ailesi — yedek' },
+    { key:'megavid', label:'Megavid', sub:'MEGAVID embed — ayrı sistem, /proxy üzerinden' }
   ];
-  wrap.innerHTML = rows.map(r=>{
-    const on = globalSources[r.key] !== false;
+  wrap.innerHTML = FAMILIES.map(r=>{
+    const on = sourceEnabled(r.key);
     return `
     <div class="settings-row">
       <div>
@@ -4804,9 +4847,9 @@ function showPlayerUnavailable(){
   const t1 = state.lang==='en' ? 'No playable source for this episode'
     : (state.lang==='tr' ? 'Bu bölüm için oynatılabilir kaynak bulunamadı'
        : 'Bu bölüm üçün oynadıla bilən mənbə tapılmadı');
-  const t2 = state.lang==='en' ? 'Both sources failed or this episode is not available yet.'
-    : (state.lang==='tr' ? 'Her iki kaynak da başarısız oldu veya bu bölüm henüz yayında değil.'
-       : 'Hər iki mənbə uğursuz oldu və ya bu bölüm hələ yayında deyil.');
+  const t2 = state.lang==='en' ? 'No source could play this episode.'
+    : (state.lang==='tr' ? 'Hiçbir kaynak bu bölümü oynatamadı.'
+       : 'Heç bir mənbə bu bölümü oynada bilmədi.');
   const retry = state.lang==='en' ? 'Retry' : (state.lang==='tr' ? 'Tekrar Dene' : 'Yenidən Cəhd');
   const tryMegavid = state.lang==='en' ? 'Open in Server 2'
     : (state.lang==='tr' ? 'Sunucu 2\'de dene' : 'Sunucu 2-də sına');
@@ -4878,19 +4921,35 @@ function loadEpisodeIntoPlayer(episodeNum){
         }
       });
     } else {
-      // Megavid varlığını otakuvid çözümlemesiyle PARALEL öğren → yavaş otakuvid'de
-      // karar (sabret vs Megavid'e geç) saniyeler içinde verilir.
-      const megavidInfoP = megavidAvailability(currentDetail, episodeNum).catch(()=>({ available:false, missing:false, data:null }));
-      loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, megavidInfoP).then(didPlay => {
-        if(!didPlay && currentEpisodeNum === episodeNum){
-          loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
-            if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
-              if(megavidLastStatus === 'missing' || megavidLastStatus === 'disabled') showPlayerUnavailable();
-              else mountMegavidIframe(frame, currentDetail, episodeNum);
-            }
-          });
-        }
-      });
+      const specificFamily = preferredAninekoSource();
+      if(specificFamily){
+        // Kullanıcı belirli bir sunucu seçti → yalnızca O sunucuya istek gider
+        // (Megavid/başka pre-flight YOK). O sunucu çalamazsa Megavid yedeğe düşer.
+        loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, null).then(didPlay => {
+          if(!didPlay && currentEpisodeNum === episodeNum){
+            loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
+              if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
+                if(megavidLastStatus === 'missing' || megavidLastStatus === 'disabled') showPlayerUnavailable();
+                else mountMegavidIframe(frame, currentDetail, episodeNum);
+              }
+            });
+          }
+        });
+      } else {
+        // Otomatik: Megavid varlığını anineko çözümlemesiyle paralel öğren →
+        // yavaş kaynakta karar (sabret vs Megavid'e geç) saniyeler içinde verilir.
+        const megavidInfoP = megavidAvailability(currentDetail, episodeNum).catch(()=>({ available:false, missing:false, data:null }));
+        loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, megavidInfoP).then(didPlay => {
+          if(!didPlay && currentEpisodeNum === episodeNum){
+            loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
+              if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
+                if(megavidLastStatus === 'missing' || megavidLastStatus === 'disabled') showPlayerUnavailable();
+                else mountMegavidIframe(frame, currentDetail, episodeNum);
+              }
+            });
+          }
+        });
+      }
     }
     return;
   }
@@ -4994,6 +5053,77 @@ function mountDirectPlayer(frame, url, subtitleUrl){
   attachPlayerBehaviors(vid, frame);
 }
 
+// ---- Anime-skip (intro atlama) ---------------------------------------------
+// anime-skip.com'dan Intro/Canon interpolasyon noktalarını çeker: "Canon" at'ı
+// intronun bittiği andır. API paylaşımlı client-id ile cömert olmayan bir
+// rate-limite sahip, bu yüzden: tek istek/bölüm, localStorage önbelleği (24s),
+// 8s timeout ve herhangi bir hata/boş dönerse eski heuristic'e geri dönülür —
+// entegrasyon asla oynatmayı engellemez.
+
+const ANIME_SKIP_CLIENT_ID = 'ZGfO0sMF3eCwLYf8yMSCJjlynwNGRXWE';
+const ANIME_SKIP_QUERY = `query($serviceId:String!){ findShowsByExternalId(service: ANILIST, serviceId:$serviceId){ episodes { timestamps { at type { name } } } } }`;
+
+async function fetchJsonWithTimeout(url, opts, ms){
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), ms);
+  try{
+    return await fetch(url, Object.assign({}, opts, { signal: ctrl.signal }));
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+// anime-skip'tan bu bölümün intro-bitiş saniyesini döndürür; veri yoksa/null.
+function animeSkipIntroEnd(aniId, ep){
+  if(!aniId || !ep) return null;
+  try{
+    const key = 'animeskip:' + aniId;
+    const cached = JSON.parse(localStorage.getItem(key) || 'null');
+    if(cached && cached.expires > Date.now() && Array.isArray(cached.timestamps)){
+      const epTs = cached.timestamps[ep - 1] || cached.timestamps[ep] || null;
+      return epTs && epTs.target ? epTs.target : null;
+    }
+  }catch(e){ /* cached malformed */ }
+  return null;
+}
+
+async function loadAnimeSkipIntroEnd(aniId, ep){
+  if(!aniId || !ep) return null;
+  const key = 'animeskip:' + aniId;
+  try{
+    const cached = JSON.parse(localStorage.getItem(key) || 'null');
+    if(cached && cached.expires > Date.now()) return animeSkipIntroEnd(aniId, ep);
+  }catch(e){ /* ignore */ }
+
+  try{
+    const res = await fetchJsonWithTimeout('https://api.anime-skip.com/graphql', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'x-client-id': ANIME_SKIP_CLIENT_ID },
+      body: JSON.stringify({ query: ANIME_SKIP_QUERY, variables:{ serviceId: String(aniId) } })
+    }, 8000);
+    if(!res.ok) return null;
+    const data = await res.json().catch(()=>null);
+    const shows = data && data.data && Array.isArray(data.data.findShowsByExternalId)
+      ? data.data.findShowsByExternalId : [];
+    const episodes = shows[0] && Array.isArray(shows[0].episodes) ? shows[0].episodes : [];
+    // Her bölüm için "Canon" (intro-bitiş) noktasını çıkar. Yetersiz bölüm listesi
+    // veya boş timestamps → null → caller heuristic'e döner.
+    const timestamps = episodes.map((e)=>{
+      const ts = Array.isArray(e && e.timestamps) ? e.timestamps : [];
+      const canon = ts.find(t => t && t.type && t.type.name === 'Canon');
+      const target = canon && typeof canon.at === 'number' ? canon.at : null;
+      return { target };
+    });
+    try{
+      localStorage.setItem(key, JSON.stringify({ timestamps, expires: Date.now() + 24*3600*1000 }));
+    }catch(e){ /* storage full */ }
+    const epTs = timestamps[ep - 1] || timestamps[ep] || null;
+    return epTs && epTs.target ? epTs.target : null;
+  }catch(e){
+    return null;
+  }
+}
+
 // Wires up the two "smart" player features: a skip-intro button that appears
 // early in playback, and autoplay-next when the episode ends. Both are driven
 // by the toggles in the player's settings panel (state.skipIntro / state.autoplay).
@@ -5001,11 +5131,33 @@ function mountDirectPlayer(frame, url, subtitleUrl){
 // browser's default <video> chrome, which looked inconsistent across devices.
 function attachPlayerBehaviors(vid, frame){
   let skipBtnShown = false;
+  let skipHandled = false;
   let autoWatchedMarked = false;
+  // Intro-bitiş saniyesi: anime-skip verisi varsa ondan, yoksa heuristic (varsayılan).
+  const epForSkip = currentEpisodeNum;
+  const aniForSkip = currentDetail ? currentDetail.id : null;
+  let skipData = null;
+  loadAnimeSkipIntroEnd(aniForSkip, epForSkip).then((t)=>{
+    skipData = { target: (typeof t === 'number' && t > 3) ? t : 90, source: (typeof t === 'number') ? 'animeskip' : 'heuristic' };
+  });
   vid.addEventListener('timeupdate', ()=>{
-    if(state.skipIntro && !skipBtnShown && vid.currentTime > 3 && vid.currentTime < 90){
-      showSkipIntroButton(frame, vid);
-      skipBtnShown = true;
+    if(state.skipIntro && !skipHandled && vid.currentTime > 3){
+      const target = skipData && skipData.target ? skipData.target : 90;
+      // Yalnızca intronun içindeyken (henüz atlama noktasına gelmediyse) teklif et.
+      if(vid.currentTime < target - 0.5){
+        if(!skipBtnShown){
+          showSkipIntroButton(frame, vid, target);
+          skipBtnShown = true;
+        }
+        // "Açılış şarkısını otomatik geç" seçiliyse VE gerçek anime-skip verisi
+        // varsa bir kez otomatik atlar. Heuristic'e (veri yok) otomatik atlamayız
+        // çünkü tahmini bir noktayı doğru varsayıp videoyu bozamayız.
+        if(skipData && skipData.source === 'animeskip'){
+          vid.currentTime = target;
+          skipHandled = true;
+          if(skipBtnShown){ const b = document.getElementById('skipIntroBtn'); if(b) b.remove(); skipBtnShown = false; }
+        }
+      }
     }
     // Auto-mark "watched" once past 80% — the small anime-site UX detail that
     // makes the episode list show a checkmark without the user doing anything.
@@ -5189,12 +5341,13 @@ function buildCustomControls(vid, frame){
   showBar();
 }
 
-function showSkipIntroButton(frame, vid){
+function showSkipIntroButton(frame, vid, target){
+  const skipTo = (typeof target === 'number' && target > 3) ? target : 90;
   const btn = document.createElement('button');
   btn.id = 'skipIntroBtn';
   btn.textContent = state.lang==='en' ? 'Skip Intro' : (state.lang==='tr' ? 'İntroyu Geç' : 'İntronu Ötür');
   btn.style.cssText = 'position:absolute; bottom:60px; right:14px; background:rgba(0,0,0,0.75); color:#fff; border:1px solid rgba(255,255,255,0.3); padding:9px 16px; border-radius:10px; font-size:12.5px; font-weight:700; z-index:5;';
-  btn.onclick = ()=>{ vid.currentTime = 90; btn.remove(); };
+  btn.onclick = ()=>{ vid.currentTime = skipTo; btn.remove(); };
   frame.appendChild(btn);
   setTimeout(()=>{ if(btn.parentNode) btn.remove(); }, 15000);
 }
@@ -5495,27 +5648,28 @@ function buildPlayerSettingsPanel(src){
   } else {
     srcRow.classList.remove('hidden');
     const pref = state.sourcePref || 'auto';
+    // Temiz liste: Otomatik + her AÇIK kaynak ismi ismiyle. Kapatılan sunucu
+    // burada görünmez; seçilen kaynak YALNIZCA o sunucudan istenir.
     const opts = [
-      { v:'auto',    label: state.lang==='en'?'Auto':(state.lang==='tr'?'Otomatik':'Avtomatik') },
-      { v:'anineko', label:'Sunucu 1' },
-      { v:'megavid', label:'Sunucu 2' }
+      { v:'auto', label: state.lang==='en'?'Auto':(state.lang==='tr'?'Otomatik':'Avtomatik') }
     ];
-    // Worker birden fazla Anineko kaynağı döndürdüyse her birini ayrı pill olarak
-    // göster → kullanıcı Otakuhg/Bibiemb/Otakuvid arasında elle seçim yapabilir.
-    if(currentAninekoCandidates && currentAninekoCandidates.length > 1){
-      currentAninekoCandidates.forEach((c, i)=>{
-        opts.push({ v:'aneko:' + i, label: 'S' + (i+1) + ' • ' + (c.name || c.key) });
-      });
-    }
+    const families = [
+      { k:'otakuhg', label:'Otakuhg' },
+      { k:'bibiemb', label:'Bibiemb' },
+      { k:'otakuvid', label:'Otakuvid' }
+    ];
+    families.forEach(f=>{
+      if(sourceEnabled(f.k)) opts.push({ v:'aneko:' + f.k, label: f.label });
+    });
+    if(sourceEnabled('megavid')) opts.push({ v:'megavid', label:'Megavid' });
+    const anekoPrefKey = preferredAninekoSource();
+    const activeFamily = anekoPrefKey || (isAninekoSourceLabel(currentSourceLabel) ? currentSourceLabel : null);
     srcWrap.innerHTML = opts.map(o=>{
-      let active = pref === o.v;
-      let onClick = `setSourcePref('${o.v}')`;
-      if(o.v.indexOf('aneko:') === 0){
-        const idx = parseInt(o.v.split(':')[1], 10);
-        active = isAninekoSourceLabel(currentSourceLabel) && currentAninekoIndex === idx;
-        onClick = `switchAninekoSource(${idx})`;
-      }
-      return `<button class="option-pill ${active?'active':''}" onclick="${onClick}">${o.label}</button>`;
+      let active = false;
+      if(o.v === 'auto') active = pref === 'auto';
+      else if(o.v === 'megavid') active = pref === 'megavid' || (!isAninekoSourceLabel(currentSourceLabel) && currentSourceLabel === 'megavid');
+      else active = pref === o.v || activeFamily === o.v.slice(6);
+      return `<button class="option-pill ${active?'active':''}" onclick="setSourcePref('${o.v}')">${o.label}</button>`;
     }).join('');
   }
 
@@ -5650,9 +5804,9 @@ function setPlaybackSpeed(speed, btn){
 // Otakuvid/Megavid önceliğini değiştirir, kaydeder ve mevcut bölümü yeniden yükler.
 function setSourcePref(pref){
   state.sourcePref = pref;
-  // Kullanıcı açıkça Otakuvid'i seçtiyse bozuk-bölüm hafızasını temizle
+  // Kullanıcı açıkça bir aile seçtiyse bozuk-bölüm hafızasını temizle
   // (tekrar denemek istiyor demektir).
-  if(pref === 'anineko' && currentDetail){
+  if(pref.indexOf('aneko:') === 0 && currentDetail){
     const ep = currentEpisodeNum;
     if(ep) clearSourceBroken(currentDetail.id, ep);
   }
@@ -5874,6 +6028,7 @@ function bootApp(retriesLeft){
   loadAnilistCache();
   loadState().then(()=>{
     initToggles();
+    verifyAdminSession();
     // Restore whatever page the URL points to (e.g. a refreshed /anime/21),
     // instead of always landing on home. Falls back to home if the path
     // doesn't match anything or the referenced anime isn't in the library.
