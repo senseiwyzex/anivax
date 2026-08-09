@@ -338,6 +338,8 @@ async function handleTranslate(request, url) {
   const thinking = body.thinking && typeof body.thinking === "object" ? body.thinking : { type: "disabled" };
   const maxTokens = Number.isFinite(body.maxTokens) ? body.maxTokens
     : (typeof body.max_tokens === "number" ? body.max_tokens : 4096);
+  const responseFormat = body.responseFormat && typeof body.responseFormat === "object" ? body.responseFormat
+    : (typeof body.response_format === "object" ? body.response_format : undefined);
   if (!messages && !text) {
     return new Response(
       JSON.stringify({ error: "Missing messages or text" }),
@@ -364,6 +366,7 @@ async function handleTranslate(request, url) {
       max_tokens: maxTokens,
       thinking,
       do_sample: false,
+      ...(responseFormat ? { response_format: responseFormat } : {})
     }),
   }, 90000);
 

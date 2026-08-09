@@ -5934,6 +5934,14 @@ async function translateSubtitlesToAz(){
     return;
   }
 
+  // Varsa önceki çeviri track'ini temizle (aynı oturumda yeniden basıldıysa).
+  currentSubtitleTracks = currentSubtitleTracks.filter(t => t.label !== 'Azərbaycanca (AI)');
+  if(vid && vid.querySelectorAll){
+    vid.querySelectorAll('track').forEach(t => {
+      if(t.label === 'Azərbaycanca (AI)' && t.parentNode) t.parentNode.removeChild(t);
+    });
+  }
+
   aiSubTranslating = true;
   aiSubProgress = 0;
   const btn = document.getElementById('aiSubBtn');
@@ -5982,10 +5990,11 @@ async function translateSubtitlesToAz(){
       return URL.createObjectURL(new Blob([vttLines.join('\n')], { type: 'text/vtt' }));
     };
 
-    // Chunk'lar: PARALEL işlenir (aynı anda 8 istek). Her chunk bitince track
-    // blob'u anında yenilenir → ilerleme ekranda görülür.
+    // Chunk'lar: PARALEL ama ölçülü — ücretsiz modelde aşırı paralellik
+    // rate-limit yaratıp parçaları boş döndürür (İngilizce kalır). 4'lü
+    // paralellik hızı korur, isabet oranını yükseltir.
     const CHUNK = 12;
-    const PARALLEL = 8;
+    const PARALLEL = 4;
     const chunkStarts = [];
     for(let i=0;i<cues.length;i+=CHUNK) chunkStarts.push(i);
     let nextChunk = 0;
@@ -6025,6 +6034,38 @@ async function translateSubtitlesToAz(){
     });
     await Promise.all(workers);
 
+    // Onarım geçişi: hâlâ boş kalan (çevrilemeyen → İngilizce kalacak) satır
+    // bloklarını yeniden dene. Bu tur, paralel turda rate-limit'e takılan
+    // parçaları yakalar ve AZ kapsamını yükseltir.
+    const missingChunks = [];
+    for(let i=0;i<cues.length;i+=CHUNK){
+      const slice = cues.slice(i, i+CHUNK);
+      if(slice.some((c, j) => !(outLines[i+j] && outLines[i+j].trim()))){
+        missingChunks.push(i);
+      }
+    }
+    for(const start of missingChunks){
+      if(start >= cues.length) continue;
+      const slice = cues.slice(start, Math.min(start+CHUNK, cues.length));
+      const missingIdx = slice.map((_, j) => start + j).filter(idx => !(outLines[idx] && outLines[idx].trim()));
+      if(!missingIdx.length) continue;
+      const lines = missingIdx.map(idx => original[idx]);
+      let rep = null;
+      for(let attempt = 0; attempt < 2 && !rep; attempt++){
+        try{ rep = await translateChunkToAz(apiKey, lines); }
+        catch(err){ console.error('[ai-sub] repair ' + start + ':', err && err.message ? err.message : err); }
+      }
+      if(Array.isArray(rep)){
+        rep.forEach((line, j)=>{
+          const idx = missingIdx[j];
+          if(idx != null && line && line.trim()) outLines[idx] = line;
+        });
+      }
+      doneChunks++;
+      aiSubProgress = Math.min(99, Math.round((doneChunks / chunkStarts.length) * 100));
+      updateBtn();
+    }
+
     // Kesinleştir: son blob'u kalıcı yap ve track'te göster.
     if(lastBlob) URL.revokeObjectURL(lastBlob);
     const finalBlob = buildBlob();
@@ -6049,6 +6090,9 @@ async function translateSubtitlesToAz(){
 }
 
 // Tek hızlı model GLM-4.7-Flash ile (fallback yok) tek chunk çevirir.
+// Yanıt JSON-array olarak istenir; parse önce JSON'a, sonra "N. metin"
+// satırlara, sonra pozisyonel eşlemeye kademeli düşer — hiçbir satır İngilizce
+// kalmasın diye en sağlam algoritma kullanılır.
 async function translateChunkToAz(apiKey, lines){
   const numbered = lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
   const body = {
@@ -6056,10 +6100,11 @@ async function translateChunkToAz(apiKey, lines){
     model: 'glm-4.7-flash',
     thinking: { type: 'disabled' },
     max_tokens: 4096,
+    response_format: { type: 'json_object' },
     messages: [
       {
         role: 'system',
-        content: 'You are a professional Azerbaijani subtitle translator. For every English anime subtitle line given as "N. text", output EXACTLY one line "N. authoritative Azerbaijani translation". Rules: (1) Write in natural, idiomatic, fluent Azerbaijani (Azərbaycanca) — how a native speaker would say it, not a literal or word-for-word translation. (2) Keep character names, place names and proper nouns in Latin script exactly as-is. (3) Keep the tone (casual, dramatic, playful, respectful "siz" vs familiar "sən") true to the original. (4) Line count must match — always return one line per input line, nothing else (no notes, no quotes around the line, no explanation, no numbering prefix). (5) If a line is a sound/effect note (e.g. "music playing", "door creaks"), translate the description naturally into Azerbaijani.'
+        content: 'You are a professional Azerbaijani subtitle translator. For the given English anime subtitle lines, return ALL your translations in EXACTLY the following JSON format and nothing else:\n{"translations":["translation of line 1","translation of line 2",...]}\nRules: (1) Natural, idiomatic, fluent Azerbaijani (Azərbaycanca) — as a native speaker, not literal. (2) Keep character names, place names and proper nouns in Latin script as-is. (3) Keep tone (casual, dramatic, playful; respectful "siz" vs familiar "sən"). (4) One array element per input line, in the same order — count must match exactly. (5) Translate sound/effect notes naturally (e.g. "music playing" → "musiqi davam edir"). (6) Do not add notes, explanations or quotes around the content.'
       },
       { role: 'user', content: numbered }
     ]
@@ -6073,18 +6118,65 @@ async function translateChunkToAz(apiKey, lines){
   if(!resp.ok || !json || typeof json.content !== 'string'){
     throw new Error(json && json.error ? json.error : 'upstream');
   }
-  // Yanıtı "N. metin" satırlarına böl, sırayla eşle.
+
+  // 1) JSON-array doğrudan
+  let arr = tryParseJsonArray(json.content);
+  // 2) {"translations":[...]} nesnesi
+  if(!arr){
+    const obj = tryParseJsonObject(json.content);
+    if(obj && Array.isArray(obj.translations)) arr = obj.translations;
+  }
+  // 3) "N. metin" satırlar
+  if(!arr){
+    arr = [];
+    json.content.split('\n').forEach(line=>{
+      const m = line.match(/^\s*(\d+)[.)]?\s*(.*)$/);
+      if(m && (m[2]||'').trim()) arr[parseInt(m[1],10)-1] = m[2].trim();
+    });
+  }
   const out = new Array(lines.length);
-  json.content.split('\n').forEach(line=>{
-    const m = line.match(/^\s*(\d+)[.)]?\s*(.*)$/);
-    if(m){
-      const idx = parseInt(m[1],10) - 1;
-      if(idx >= 0 && idx < lines.length && (m[2]||'').trim()) out[idx] = m[2].trim();
+  if(Array.isArray(arr)){
+    arr.forEach((t, j)=>{
+      const text = typeof t === 'string' ? t.trim() : '';
+      if(text) out[j] = text;
+    });
+  }
+  // Kaçırılan satırlar orijinal metni koru (align bozulmasın) — kullanıcıya
+  // İngilizce parça kalmamalı, en kötü ihtimalle üst seviye retry ile tekrar.
+  for(let i=0;i<lines.length;i++){
+    if(!out[i]){
+      out[i] = '';
     }
-  });
-  // Kaçırılan satırlar için orijinal metni koru (align bozulmasın).
-  for(let i=0;i<lines.length;i++){ if(!out[i]) out[i] = lines[i]; }
+  }
+  // Eğer hiçbir satır çevrilmediyse model bozuk/uyumsuz yanıt üretmiş → retry.
+  if(out.every(t => !t)) throw new Error('no-parse');
   return out;
+}
+
+function tryParseJsonArray(str){
+  try{
+    const cleaned = str.replace(/```json|```/g,'').trim();
+    const first = cleaned.indexOf('[');
+    const last = cleaned.lastIndexOf(']');
+    if(first >= 0 && last > first){
+      const parsed = JSON.parse(cleaned.slice(first, last+1));
+      if(Array.isArray(parsed)) return parsed;
+    }
+    const parsed = JSON.parse(cleaned);
+    if(Array.isArray(parsed)) return parsed;
+  }catch(e){}
+  return null;
+}
+function tryParseJsonObject(str){
+  try{
+    const cleaned = str.replace(/```json|```/g,'').trim();
+    const first = cleaned.indexOf('{');
+    const last = cleaned.lastIndexOf('}');
+    if(first >= 0 && last > first){
+      return JSON.parse(cleaned.slice(first, last+1));
+    }
+    return JSON.parse(cleaned);
+  }catch(e){ return null; }
 }
 
 // Basit VTT ayrıştırıcı: { start, end, settings, text } döndürür.
