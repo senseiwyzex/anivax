@@ -333,6 +333,11 @@ async function handleTranslate(request, url) {
   const model = typeof body.model === "string" && body.model ? body.model : "glm-4.7-flash";
   const messages = Array.isArray(body.messages) ? body.messages : null;
   const text = typeof body.text === "string" ? body.text : null;
+  // GLM "thinking" mode slows responses dramatically for batch subtitle work;
+  // default to disabled, allow explicit override from the client.
+  const thinking = body.thinking && typeof body.thinking === "object" ? body.thinking : { type: "disabled" };
+  const maxTokens = Number.isFinite(body.maxTokens) ? body.maxTokens
+    : (typeof body.max_tokens === "number" ? body.max_tokens : 4096);
   if (!messages && !text) {
     return new Response(
       JSON.stringify({ error: "Missing messages or text" }),
@@ -356,9 +361,11 @@ async function handleTranslate(request, url) {
       model,
       messages: upstreamMessages,
       temperature: 0.3,
-      max_tokens: 2048,
+      max_tokens: maxTokens,
+      thinking,
+      do_sample: false,
     }),
-  }, 60000);
+  }, 90000);
 
   if (!upstream.ok) {
     let msg = "Upstream " + upstream.status;

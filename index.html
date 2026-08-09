@@ -5956,59 +5956,80 @@ async function translateSubtitlesToAz(){
     const cues = parseVttCues(raw);
     if(!cues.length) throw new Error('vtt-parse');
 
-    // Çevrilecek satırları parçalara böl (20 satır/istek — token sınırına
-    // takılmadan hızlı ilerler). Sıra önemli; bloklar sırayla işlenir ve
-    // tek bir blok hata verirse o blok orijinal haliyle korunur (tüm çeviri
-    // iptal olmaz). Yalnızca çok sayıda blok art arda hata verirse durur.
-    const translated = [];
-    const CHUNK = 20;
-    const MAX_FAIL = 3;
-    let failCount = 0;
-    for(let i=0;i<cues.length;i+=CHUNK){
-      const slice = cues.slice(i, i+CHUNK);
-      const lines = slice.map(c => c.text);
-      let result = null;
-      for(let attempt = 0; attempt < 3 && result === null; attempt++){
-        try{
-          result = await translateChunkToAz(apiKey, lines);
-        }catch(err){
-          console.error('[ai-sub] chunk ' + i + ' attempt ' + attempt + ':', err && err.message ? err.message : err);
-          if(attempt < 2) await new Promise(r => setTimeout(r, 800));
-        }
-      }
-      if(result){
-        translated.push(...result);
-        failCount = 0;
-      }else{
-        // Blok hata verdi: orijinal metni koru, çeviri tamamen kesilmesin.
-        translated.push(...lines);
-        failCount++;
-        if(failCount >= MAX_FAIL){
-          throw new Error('too-many-failures');
-        }
-      }
-      aiSubProgress = Math.min(99, Math.round(((i+CHUNK)/cues.length)*100));
-      updateBtn();
-    }
-
-    // Çevrilmiş VTT oluştur
-    const vttLines = ['WEBVTT', ''];
-    cues.forEach((cue, i)=>{
-      vttLines.push(cue.start + ' --> ' + cue.end + (cue.settings ? ' ' + cue.settings : ''));
-      vttLines.push(translated[i] || cue.text);
-      vttLines.push('');
-    });
-    const blobUrl = URL.createObjectURL(new Blob([vttLines.join('\n')], { type: 'text/vtt' }));
-
-    // Yeni track'i ekle: currentSubtitleTracks + video elementine <track>.
+    // Yeni AI track'ini baştan ekle ve aktif yap — parçalar geldikçe blob
+    // güncellenir, böylece çevirinin tamamı bitmeden tamamlanan kısım ANINDA
+    // ekranda görünür (istep pozisyonu hiç değişmez).
     const newIndex = currentSubtitleTracks.length;
-    currentSubtitleTracks.push({ file: blobUrl, label: 'Azərbaycanca (AI)' });
+    currentSubtitleTracks.push({ file: null, label: 'Azərbaycanca (AI)' });
     const trackEl = document.createElement('track');
     trackEl.kind = 'subtitles';
     trackEl.label = 'Azərbaycanca (AI)';
     trackEl.srclang = 'az';
-    trackEl.src = blobUrl;
+    trackEl.src = src.file;
     vid.appendChild(trackEl);
+    switchSubtitle(newIndex);
+
+    const original = cues.map(c => c.text);
+    const outLines = new Array(cues.length).fill(null);
+
+    const buildBlob = ()=>{
+      const vttLines = ['WEBVTT', ''];
+      cues.forEach((cue, i)=>{
+        vttLines.push(cue.start + ' --> ' + cue.end + (cue.settings ? ' ' + cue.settings : ''));
+        vttLines.push((outLines[i] && outLines[i].trim()) ? outLines[i] : original[i]);
+        vttLines.push('');
+      });
+      return URL.createObjectURL(new Blob([vttLines.join('\n')], { type: 'text/vtt' }));
+    };
+
+    // Chunk'lar: PARALEL işlenir (aynı anda 8 istek). Her chunk bitince track
+    // blob'u anında yenilenir → ilerleme ekranda görülür.
+    const CHUNK = 12;
+    const PARALLEL = 8;
+    const chunkStarts = [];
+    for(let i=0;i<cues.length;i+=CHUNK) chunkStarts.push(i);
+    let nextChunk = 0;
+    let doneChunks = 0;
+    let lastBlob = null;
+
+    async function processChunk(start){
+      const slice = cues.slice(start, start+CHUNK);
+      const lines = slice.map(c => c.text);
+      let translated = null;
+      for(let attempt = 0; attempt < 4 && !translated; attempt++){
+        try{
+          translated = await translateChunkToAz(apiKey, lines);
+        }catch(err){
+          console.error('[ai-sub] chunk ' + start + ' attempt ' + attempt + ':', err && err.message ? err.message : err);
+          if(attempt < 3) await new Promise(r => setTimeout(r, 400));
+        }
+      }
+      if(Array.isArray(translated)){
+        translated.forEach((line, j)=>{ if(line && line.trim()) outLines[start + j] = line; });
+      }
+      doneChunks++;
+      aiSubProgress = Math.min(99, Math.round((doneChunks / chunkStarts.length) * 100));
+      updateBtn();
+      // Blob'u yenile: çevrilen kısım anında ekranda.
+      if(lastBlob) URL.revokeObjectURL(lastBlob);
+      lastBlob = buildBlob();
+      trackEl.src = lastBlob;
+      if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
+    }
+
+    const workers = Array(Math.min(PARALLEL, chunkStarts.length) || 1).fill(null).map(async ()=>{
+      while(nextChunk < chunkStarts.length){
+        const start = chunkStarts[nextChunk++];
+        await processChunk(start);
+      }
+    });
+    await Promise.all(workers);
+
+    // Kesinleştir: son blob'u kalıcı yap ve track'te göster.
+    if(lastBlob) URL.revokeObjectURL(lastBlob);
+    const finalBlob = buildBlob();
+    currentSubtitleTracks[newIndex].file = finalBlob;
+    trackEl.src = finalBlob;
     switchSubtitle(newIndex);
     aiSubProgress = 100;
     updateBtn();
@@ -6027,31 +6048,18 @@ async function translateSubtitlesToAz(){
   }
 }
 
-// Tek bir chunk'ı GLM ile çevirir; her satır için bir çeviri döner. Model
-// yoksa/yoğunsa sırayla daha genel GLM varyantları denenir.
+// Tek hızlı model GLM-4.7-Flash ile (fallback yok) tek chunk çevirir.
 async function translateChunkToAz(apiKey, lines){
   const numbered = lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
-  const MODELS = ['glm-4.7-flash', 'glm-4.5-flash', 'glm-4-flash'];
-  let lastErr = null;
-  for(const model of MODELS){
-    try{
-      return await translateChunkWithModel(apiKey, numbered, model, lines.length, lines);
-    }catch(err){
-      lastErr = err && err.message ? err.message : String(err);
-      console.warn('[ai-sub] model ' + model + ' failed:', lastErr);
-    }
-  }
-  throw new Error(lastErr || 'upstream');
-}
-
-async function translateChunkWithModel(apiKey, numbered, model, lineCount, origLines){
   const body = {
     apiKey,
-    model,
+    model: 'glm-4.7-flash',
+    thinking: { type: 'disabled' },
+    max_tokens: 4096,
     messages: [
       {
         role: 'system',
-        content: 'You are a professional subtitle translator. Translate the English anime subtitle lines into natural, fluent Azerbaijani (Azərbaycanca). Keep character names and proper nouns in Latin script as-is. Preserve the exact meaning, tone and line count. For every input line numbered "N. text" return exactly one line "N. translated_text" in the same order. Output nothing else.'
+        content: 'You are a professional Azerbaijani subtitle translator. For every English anime subtitle line given as "N. text", output EXACTLY one line "N. authoritative Azerbaijani translation". Rules: (1) Write in natural, idiomatic, fluent Azerbaijani (Azərbaycanca) — how a native speaker would say it, not a literal or word-for-word translation. (2) Keep character names, place names and proper nouns in Latin script exactly as-is. (3) Keep the tone (casual, dramatic, playful, respectful "siz" vs familiar "sən") true to the original. (4) Line count must match — always return one line per input line, nothing else (no notes, no quotes around the line, no explanation, no numbering prefix). (5) If a line is a sound/effect note (e.g. "music playing", "door creaks"), translate the description naturally into Azerbaijani.'
       },
       { role: 'user', content: numbered }
     ]
@@ -6066,16 +6074,16 @@ async function translateChunkWithModel(apiKey, numbered, model, lineCount, origL
     throw new Error(json && json.error ? json.error : 'upstream');
   }
   // Yanıtı "N. metin" satırlarına böl, sırayla eşle.
-  const out = new Array(lineCount);
+  const out = new Array(lines.length);
   json.content.split('\n').forEach(line=>{
     const m = line.match(/^\s*(\d+)[.)]?\s*(.*)$/);
     if(m){
       const idx = parseInt(m[1],10) - 1;
-      if(idx >= 0 && idx < lineCount && (m[2]||'').trim()) out[idx] = m[2].trim();
+      if(idx >= 0 && idx < lines.length && (m[2]||'').trim()) out[idx] = m[2].trim();
     }
   });
   // Kaçırılan satırlar için orijinal metni koru (align bozulmasın).
-  for(let i=0;i<lineCount;i++){ if(!out[i]) out[i] = origLines[i]; }
+  for(let i=0;i<lines.length;i++){ if(!out[i]) out[i] = lines[i]; }
   return out;
 }
 
