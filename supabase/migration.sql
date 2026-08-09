@@ -175,6 +175,6 @@ begin
   foreach t in array array['library','categories','site_config','profiles','user_anime_status','user_ratings','episode_progress','watch_history']
   loop
     execute format('drop trigger if exists %I on %I.%I;', 'set_updated_at', 'public', t);
-    execute format('create trigger set_updated_at before update on %I.%I for each row execute function public.touch_updated_at();', t, t);
+    execute format('create trigger %I before update on %I.%I for each row execute function public.touch_updated_at();', 'set_updated_at', 'public', t);
   end loop;
 end $$;

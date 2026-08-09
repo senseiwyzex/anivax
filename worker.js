@@ -23,7 +23,7 @@ const MEGAVID_BASE = "https://megavid.buzz";
 
 const DEFAULT_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "*",
 };
 
@@ -310,6 +310,76 @@ async function handleProxy(request, url) {
       headers: corsHeaders(),
     });
   }
+}
+
+// ---- /translate --------------------------------------------------------------
+// Proxies an OpenAI-compatible chat completion (Z.AI / GLM) request so the
+// browser never has to send the user's API key to a third-party origin directly
+// (CORS + key hygiene). The user's own key travels from their browser to our
+// worker over HTTPS and is only used for this one upstream call.
+async function handleTranslate(request, url) {
+  if (request.method !== "POST") {
+    return new Response("Method not allowed", { status: 405, headers: corsHeaders() });
+  }
+  let body;
+  try { body = await request.json(); } catch { body = null; }
+  if (!body || typeof body.apiKey !== "string" || !body.apiKey) {
+    return new Response(
+      JSON.stringify({ error: "Missing apiKey" }),
+      { status: 400, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  }
+  const apiKey = body.apiKey.trim();
+  const model = typeof body.model === "string" && body.model ? body.model : "glm-4.7-flash";
+  const messages = Array.isArray(body.messages) ? body.messages : null;
+  const text = typeof body.text === "string" ? body.text : null;
+  if (!messages && !text) {
+    return new Response(
+      JSON.stringify({ error: "Missing messages or text" }),
+      { status: 400, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  }
+
+  // Build the upstream payload: prefer explicit messages, else wrap plain text.
+  const upstreamMessages = messages || [{ role: "user", content: text }];
+
+  const upstream = await fetchT("https://api.z.ai/api/paas/v4/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + apiKey,
+      // Z.AI's public API is CORS-open for authorized calls; the worker still
+      // passes a browser-ish UA so nothing upstream flags it.
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+    },
+    body: JSON.stringify({
+      model,
+      messages: upstreamMessages,
+      temperature: 0.3,
+      max_tokens: 2048,
+    }),
+  }, 60000);
+
+  if (!upstream.ok) {
+    let msg = "Upstream " + upstream.status;
+    try { const j = await upstream.json(); if (j && j.error && j.error.message) msg = j.error.message; } catch (e) {}
+    return new Response(
+      JSON.stringify({ error: msg, upstreamStatus: upstream.status }),
+      { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  }
+  const json = await upstream.json().catch(() => null);
+  if (!json || !json.choices || !json.choices[0]) {
+    return new Response(
+      JSON.stringify({ error: "Unexpected upstream response" }),
+      { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  }
+  const content = json.choices[0].message && json.choices[0].message.content;
+  return new Response(
+    JSON.stringify({ content: typeof content === "string" ? content : JSON.stringify(content) }),
+    { headers: corsHeaders({ "Content-Type": "application/json" }) },
+  );
 }
 
 // ---- /anineko-source ---------------------------------------------------------
@@ -643,6 +713,9 @@ export default {
     }
     if (url.pathname === "/proxy") {
       return await handleProxy(request, url);
+    }
+    if (url.pathname === "/translate") {
+      return await handleTranslate(request, url);
     }
 
     if (url.pathname === "/admin/login") {

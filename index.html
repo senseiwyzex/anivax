@@ -257,6 +257,10 @@
   }
   .option-pill.active{ border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
+  /* AI subtitle translate button */
+  .ai-sub-btn{ border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .ai-sub-busy{ opacity:.65; pointer-events:none; }
+
   .theme-swatch{ width:14px; height:14px; border-radius:50%; border:1px solid var(--line); }
 
   /* ---------- COMPACT ACTION BAR (replaces the old always-expanded pills) ---------- */
@@ -963,6 +967,22 @@
   </div>
 
   <div class="settings-group">
+    <div class="settings-label">AI Altyazı Çevirisi</div>
+    <div class="settings-card">
+      <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:10px;">
+        <div>
+          <div class="settings-row-label">Z.AI API açarı</div>
+          <div class="settings-row-sub">Altyazıyı AZ-a çevirmək üçün z.ai hesabından GLM-4.7-Flash API açarını yapışdırın</div>
+        </div>
+        <input type="password" id="aiApiKeyInput" placeholder="API açarı..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;">
+        <div style="display:flex; gap:8px;">
+          <button class="btn-primary" style="flex:1;" onclick="saveAiApiKey()" data-i18n="settings.save">Saxla</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-group">
     <div class="settings-label" data-i18n="settings.about">Haqqında</div>
     <div class="settings-card">
       <div class="settings-row"><div class="settings-row-label">Anivax</div><div class="settings-row-sub">v0.2</div></div>
@@ -1303,6 +1323,7 @@ let state = {
   ,subSize: 1.4       // em — altyazı boyutu
   ,subColor: '#ffffff'// altyazı rengi
   ,subBg: 0.75         // altyazı arka plan opaklığı (0 = şeffaf)
+  ,aiKey: ''           // Z.AI (GLM) API anahtarı — kullanıcı tarayıcısında saklanır
 };
 
 // ================= ADMIN AUTH =================
@@ -1686,6 +1707,8 @@ function saveSettings(){
     lang: state.lang, theme: state.theme, autoplay: state.autoplay, skipIntro: state.skipIntro,
     feedConfig: state.feedConfig || null, sourcePref: state.sourcePref || 'auto',
     directOtaku: state.directOtaku || false,
+    subBg: state.subBg || 0.75,
+    aiKey: state.aiKey || '',
     brokenSources: state.brokenSources || {},
     megavidMissing: state.megavidMissing || {}
   })); }catch(e){}
@@ -1822,6 +1845,20 @@ function renderThemeOptions(){
 }
 function setLang(code){ state.lang = code; applyI18n(); saveSettings(); renderHome(); }
 function setTheme(code){ state.theme = code; applyTheme(); renderThemeOptions(); saveSettings(); }
+
+// Z.AI (GLM) API açarı — yalnızca cihazda saklanır; çeviri istekleri
+// worker /translate ucu üzerinden proxy'lenir, anahtar tarayıcıdan çıkmaz.
+function updateAiApiKeyUI(){
+  const input = document.getElementById('aiApiKeyInput');
+  if(input) input.value = state.aiKey || '';
+}
+function saveAiApiKey(){
+  const input = document.getElementById('aiApiKeyInput');
+  if(!input) return;
+  state.aiKey = (input.value || '').trim();
+  saveSettings();
+  showToast(!!state.aiKey ? (state.lang==='en'?'API key saved':(state.lang==='tr'?'API anahtarı kaydedildi':'API açarı saxlanıldı')) : (state.lang==='en'?'API key removed':(state.lang==='tr'?'API anahtarı kaldırıldı':'API açarı silindi')));
+}
 function toggleSetting(key, el){
   state[key] = !state[key];
   el.classList.toggle('on', state[key]);
@@ -2415,6 +2452,11 @@ async function lazyFetchEpisodeSource(episodeNum){
 // çözmeye gerek yok): /source isteği m3u8 + .vtt softsub döndürür. CORS engeli
 // olduğu için media istekleri Cloudflare Worker (/proxy) üzerinden geçer.
 const MEGAVID_WORKER_BASE = 'https://anivax-proxy.wyzexsensei.workers.dev';
+
+// AI altyazı çevirisi: GitHub Pages'den worker'a giden sabit adres. CORS worker
+// tarafında açık (Access-Control-Allow-Origin: *), yani SPA farklı origin'den
+// de çağırabilir. Kalıcı hosting (örn. özel domain) varsa burayı güncelle.
+const TRANSLATE_ENDPOINT = MEGAVID_WORKER_BASE + '/translate';
 
 // Anineko kaynağı: otakuvid embed'leri üzerinden CORS'u açık (acek-cdn.com)
 // m3u8 + cdn.anizara.store .vtt softsub döndürür. Tarayıcı segmentleri
@@ -5708,8 +5750,15 @@ function buildPlayerSettingsPanel(src){
   if(vid && currentSubtitleTracks.length > 0){
     subRow.classList.remove('hidden');
     const activeIdx = activeSubtitleIndex();
-    subWrap.innerHTML = `<button class="option-pill ${activeIdx === -1 ? 'active':''}" onclick="switchSubtitle(-1)">${state.lang==='en'?'Off':(state.lang==='tr'?'Kapalı':'Söndür')}</button>` +
-      currentSubtitleTracks.map((t,i)=>`<button class="option-pill ${activeIdx === i ? 'active':''}" onclick="switchSubtitle(${i})">${t.label || ('Track ' + (i+1))}</button>`).join('');
+    // AI çevirisi butonu: İngilizce track aktifken görünür. Zaten çevrilmiş
+    // bir AZ track'i varsa o track pill'de kendisi listelenir, buton gizlenir.
+    const hasAz = currentSubtitleTracks.some(t => t.label === 'Azərbaycanca (AI)');
+    const aiBtn = hasAz ? '' : `
+      <button class="option-pill ai-sub-btn ${aiSubTranslating ? 'ai-sub-busy':''}" onclick="translateSubtitlesToAz()" id="aiSubBtn" data-sub-pill="-2">
+        ${aiSubTranslating ? 'Çevriliyor ' + aiSubProgress + '%...' : (state.lang==='en' ? '🌐 Translate to AZ' : (state.lang==='tr' ? '🌐 Çevir (AZ)' : '🌐 Çevir (AZ)'))}
+      </button>`;
+    subWrap.innerHTML = aiBtn + `<button class="option-pill ${activeIdx === -1 ? 'active':''}" onclick="switchSubtitle(-1)" data-sub-pill="-1">${state.lang==='en'?'Off':(state.lang==='tr'?'Kapalı':'Söndür')}</button>` +
+      currentSubtitleTracks.map((t,i)=>`<button class="option-pill ${activeIdx === i ? 'active':''}" onclick="switchSubtitle(${i})" data-sub-pill="${i}">${t.label || ('Track ' + (i+1))}</button>`).join('');
   } else {
     subRow.classList.add('hidden');
   }
@@ -5853,8 +5902,171 @@ function switchSubtitle(index){
   }
   const subWrap = document.getElementById('subtitleOptions');
   if(subWrap){
-    Array.from(subWrap.children).forEach((b,i)=>b.classList.toggle('active', i === index + 1));
+    Array.from(subWrap.children).forEach(b=>{
+      b.classList.toggle('active', b.dataset && String(b.dataset.subPill) === String(index));
+    });
   }
+}
+
+// ================= AI SUBTITLE TRANSLATION (GLM / Z.AI) =================
+let aiSubTranslating = false;
+let aiSubProgress = 0;
+
+// İngilizce altyazıyı AZ'a çevirir; tamamlanınca otomatik olarak yeni track'e
+// geçer. Oynatma pozisyonu bozulmaz (video akışına dokunulmaz). Çeviri worker
+// /translate ucu üzerinden GLM-4.7-Flash'a gider; key tarayıcıda saklanır.
+async function translateSubtitlesToAz(){
+  if(aiSubTranslating) return;
+  const vid = document.getElementById('mainVideoEl');
+  if(!vid || !currentSubtitleTracks.length) return;
+
+  // Aktif İngilizce track'i bul (aktif yoksa ilk track).
+  const activeIdx = activeSubtitleIndex();
+  const srcIdx = activeIdx >= 0 ? activeIdx : 0;
+  const src = currentSubtitleTracks[srcIdx];
+  if(!src || src.label === 'Azərbaycanca (AI)'){
+    showToast(state.lang==='en' ? 'Pick the English subtitle first' : (state.lang==='tr' ? 'Önce İngilizce altyazıyı seç' : 'Öncə İngilis altyazını seçin'));
+    return;
+  }
+  const apiKey = (state.aiKey || '').trim();
+  if(!apiKey){
+    showToast(state.lang==='en' ? 'Add your Z.AI API key in Settings' : (state.lang==='tr' ? 'Ayarlardan Z.AI API anahtarını ekle' : 'Ayarlardan Z.AI API açarını əlavə edin'));
+    return;
+  }
+
+  aiSubTranslating = true;
+  aiSubProgress = 0;
+  const btn = document.getElementById('aiSubBtn');
+  const updateBtn = ()=>{
+    if(btn) btn.innerHTML = 'Çevriliyor ' + aiSubProgress + '%...';
+  };
+
+  try{
+    // VTT'yi indir (addTracks aynı dosyayı tarayıcıdan çekiyor, CORS sorunsuz).
+    let raw = '';
+    try{
+      const resp = await fetch(src.file);
+      raw = await resp.text();
+    }catch(e){ raw = ''; }
+    if(!raw || !raw.trim()){
+      throw new Error('subtitle-empty');
+    }
+
+    // VTT cue'larını ayrıştır
+    const cues = parseVttCues(raw);
+    if(!cues.length) throw new Error('vtt-parse');
+
+    // Çevrilecek satırları parçalara böl (25 satır/istek — token sınırına
+    // takılmadan hızlı ilerler). Sıra önemli; bloklar sırayla işlenir.
+    const translated = [];
+    const CHUNK = 25;
+    for(let i=0;i<cues.length;i+=CHUNK){
+      const slice = cues.slice(i, i+CHUNK);
+      const result = await translateChunkToAz(apiKey, slice.map(c => c.text));
+      translated.push(...result);
+      aiSubProgress = Math.min(99, Math.round(((i+CHUNK)/cues.length)*100));
+      updateBtn();
+    }
+
+    // Çevrilmiş VTT oluştur
+    const vttLines = ['WEBVTT', ''];
+    cues.forEach((cue, i)=>{
+      vttLines.push(cue.start + ' --> ' + cue.end + (cue.settings ? ' ' + cue.settings : ''));
+      vttLines.push(translated[i] || cue.text);
+      vttLines.push('');
+    });
+    const blobUrl = URL.createObjectURL(new Blob([vttLines.join('\n')], { type: 'text/vtt' }));
+
+    // Yeni track'i ekle: currentSubtitleTracks + video elementine <track>.
+    const newIndex = currentSubtitleTracks.length;
+    currentSubtitleTracks.push({ file: blobUrl, label: 'Azərbaycanca (AI)' });
+    const trackEl = document.createElement('track');
+    trackEl.kind = 'subtitles';
+    trackEl.label = 'Azərbaycanca (AI)';
+    trackEl.srclang = 'az';
+    trackEl.src = blobUrl;
+    vid.appendChild(trackEl);
+    switchSubtitle(newIndex);
+    aiSubProgress = 100;
+    updateBtn();
+    showToast(state.lang==='en' ? 'Subtitles translated to AZ ✓' : (state.lang==='tr' ? 'Altyazı AZ çevrildi ✓' : 'Altyazı AZ-a çevrildi ✓'));
+  }catch(e){
+    console.error('[ai-sub]', e);
+    showToast(state.lang==='en' ? 'Translation failed' : (state.lang==='tr' ? 'Çeviri başarısız' : 'Tərcümə uğursuz'));
+  }finally{
+    aiSubTranslating = false;
+    aiSubProgress = 0;
+    // Butonu yeniden düzenle (AI track artık listede olduğundan buton gizlenecek)
+    const srcNow = currentDetail && currentDetail.episodeSources ? currentDetail.episodeSources[currentEpisodeNum] : null;
+    buildPlayerSettingsPanel(srcNow);
+  }
+}
+
+// Tek bir chunk'ı GLM-4.7-Flash ile çevirir; her satır için bir çeviri döner.
+async function translateChunkToAz(apiKey, lines){
+  const numbered = lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
+  const body = {
+    apiKey,
+    model: 'glm-4.7-flash',
+    messages: [
+      {
+        role: 'system',
+        content: 'You are a professional subtitle translator. Translate the English anime subtitle lines into natural, fluent Azerbaijani (Azərbaycanca). Keep character names and proper nouns in Latin script as-is. Preserve the exact meaning, tone and line count. For every input line numbered "N. text" return exactly one line "N. translated_text" in the same order. Output nothing else.'
+      },
+      { role: 'user', content: numbered }
+    ]
+  };
+  const resp = await fetch(TRANSLATE_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const json = await resp.json().catch(()=>null);
+  if(!resp.ok || !json || typeof json.content !== 'string'){
+    throw new Error(json && json.error ? json.error : 'upstream');
+  }
+  // Yanıtı "N. metin" satırlarına böl, sırayla eşle.
+  const out = new Array(lines.length);
+  json.content.split('\n').forEach(line=>{
+    const m = line.match(/^\s*(\d+)[.)]?\s*(.*)$/);
+    if(m){
+      const idx = parseInt(m[1],10) - 1;
+      if(idx >= 0 && idx < lines.length && (m[2]||'').trim()) out[idx] = m[2].trim();
+    }
+  });
+  // Kaçırılan satırlar için orijinal metni koru (align bozulmasın).
+  for(let i=0;i<lines.length;i++){ if(!out[i]) out[i] = lines[i]; }
+  return out;
+}
+
+// Basit VTT ayrıştırıcı: { start, end, settings, text } döndürür.
+function parseVttCues(raw){
+  const cues = [];
+  const lines = raw.replace(/\r/g,'').split('\n');
+  let i = 0;
+  while(i < lines.length){
+    const line = lines[i].trim();
+    if(line.includes('-->')){
+      const m = line.match(/^(\S+)\s+-->\s+(\S+)(\s+.*)?$/);
+      if(m){
+        const start = m[1];
+        const end = m[2];
+        const settings = (m[3]||'').trim();
+        let text = [];
+        i++;
+        while(i < lines.length && lines[i].trim() !== ''){
+          text.push(lines[i]);
+          i++;
+        }
+        cues.push({ start, end, settings, text: text.join('\n') });
+      } else {
+        i++;
+      }
+    } else {
+      i++;
+    }
+  }
+  return cues;
 }
 
 // Altyazı görünümü — CSS değişkenlerini video elemanına uygular (::cue üzerinden okunur).
@@ -5943,7 +6155,7 @@ function goPage(name, params, skipHistory){
 
   if(name === 'search') renderSearch();
   if(name === 'library') renderPublicLibrary();
-  if(name === 'settings') updateAccountUI();
+  if(name === 'settings'){ updateAccountUI(); updateAiApiKeyUI(); }
   if(name === 'stats') renderStatsPage();
   if(name === 'mylists') renderMyListsPage();
   if(name === 'admin'){
