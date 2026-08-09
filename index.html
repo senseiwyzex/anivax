@@ -5956,14 +5956,37 @@ async function translateSubtitlesToAz(){
     const cues = parseVttCues(raw);
     if(!cues.length) throw new Error('vtt-parse');
 
-    // Çevrilecek satırları parçalara böl (25 satır/istek — token sınırına
-    // takılmadan hızlı ilerler). Sıra önemli; bloklar sırayla işlenir.
+    // Çevrilecek satırları parçalara böl (20 satır/istek — token sınırına
+    // takılmadan hızlı ilerler). Sıra önemli; bloklar sırayla işlenir ve
+    // tek bir blok hata verirse o blok orijinal haliyle korunur (tüm çeviri
+    // iptal olmaz). Yalnızca çok sayıda blok art arda hata verirse durur.
     const translated = [];
-    const CHUNK = 25;
+    const CHUNK = 20;
+    const MAX_FAIL = 3;
+    let failCount = 0;
     for(let i=0;i<cues.length;i+=CHUNK){
       const slice = cues.slice(i, i+CHUNK);
-      const result = await translateChunkToAz(apiKey, slice.map(c => c.text));
-      translated.push(...result);
+      const lines = slice.map(c => c.text);
+      let result = null;
+      for(let attempt = 0; attempt < 3 && result === null; attempt++){
+        try{
+          result = await translateChunkToAz(apiKey, lines);
+        }catch(err){
+          console.error('[ai-sub] chunk ' + i + ' attempt ' + attempt + ':', err && err.message ? err.message : err);
+          if(attempt < 2) await new Promise(r => setTimeout(r, 800));
+        }
+      }
+      if(result){
+        translated.push(...result);
+        failCount = 0;
+      }else{
+        // Blok hata verdi: orijinal metni koru, çeviri tamamen kesilmesin.
+        translated.push(...lines);
+        failCount++;
+        if(failCount >= MAX_FAIL){
+          throw new Error('too-many-failures');
+        }
+      }
       aiSubProgress = Math.min(99, Math.round(((i+CHUNK)/cues.length)*100));
       updateBtn();
     }
@@ -5992,7 +6015,9 @@ async function translateSubtitlesToAz(){
     showToast(state.lang==='en' ? 'Subtitles translated to AZ ✓' : (state.lang==='tr' ? 'Altyazı AZ çevrildi ✓' : 'Altyazı AZ-a çevrildi ✓'));
   }catch(e){
     console.error('[ai-sub]', e);
-    showToast(state.lang==='en' ? 'Translation failed' : (state.lang==='tr' ? 'Çeviri başarısız' : 'Tərcümə uğursuz'));
+    const msg = (e && e.message) ? String(e.message) : '';
+    const short = msg.replace(/^Error\s*:?\s*/i,'').slice(0, 80);
+    showToast((state.lang==='en' ? 'Translation failed' : (state.lang==='tr' ? 'Çeviri başarısız' : 'Tərcümə uğursuz')) + (short ? ': ' + short : ''));
   }finally{
     aiSubTranslating = false;
     aiSubProgress = 0;
@@ -6002,12 +6027,27 @@ async function translateSubtitlesToAz(){
   }
 }
 
-// Tek bir chunk'ı GLM-4.7-Flash ile çevirir; her satır için bir çeviri döner.
+// Tek bir chunk'ı GLM ile çevirir; her satır için bir çeviri döner. Model
+// yoksa/yoğunsa sırayla daha genel GLM varyantları denenir.
 async function translateChunkToAz(apiKey, lines){
   const numbered = lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
+  const MODELS = ['glm-4.7-flash', 'glm-4.5-flash', 'glm-4-flash'];
+  let lastErr = null;
+  for(const model of MODELS){
+    try{
+      return await translateChunkWithModel(apiKey, numbered, model, lines.length, lines);
+    }catch(err){
+      lastErr = err && err.message ? err.message : String(err);
+      console.warn('[ai-sub] model ' + model + ' failed:', lastErr);
+    }
+  }
+  throw new Error(lastErr || 'upstream');
+}
+
+async function translateChunkWithModel(apiKey, numbered, model, lineCount, origLines){
   const body = {
     apiKey,
-    model: 'glm-4.7-flash',
+    model,
     messages: [
       {
         role: 'system',
@@ -6026,16 +6066,16 @@ async function translateChunkToAz(apiKey, lines){
     throw new Error(json && json.error ? json.error : 'upstream');
   }
   // Yanıtı "N. metin" satırlarına böl, sırayla eşle.
-  const out = new Array(lines.length);
+  const out = new Array(lineCount);
   json.content.split('\n').forEach(line=>{
     const m = line.match(/^\s*(\d+)[.)]?\s*(.*)$/);
     if(m){
       const idx = parseInt(m[1],10) - 1;
-      if(idx >= 0 && idx < lines.length && (m[2]||'').trim()) out[idx] = m[2].trim();
+      if(idx >= 0 && idx < lineCount && (m[2]||'').trim()) out[idx] = m[2].trim();
     }
   });
   // Kaçırılan satırlar için orijinal metni koru (align bozulmasın).
-  for(let i=0;i<lines.length;i++){ if(!out[i]) out[i] = lines[i]; }
+  for(let i=0;i<lineCount;i++){ if(!out[i]) out[i] = origLines[i]; }
   return out;
 }
 
