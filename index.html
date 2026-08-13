@@ -5643,6 +5643,27 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
       }
       vid.appendChild(track);
     }
+    // Önceden çevrilmişse (Supabase Storage cache) "Azərbaycanca (AI)" track'ini
+    // otomatik listeye ekle — sayfa yenilense de kullanıcı seçebilsin. Cache hit
+    // = sıfır Gemini isteği.
+    try{
+      if(currentDetail && currentDetail.id && currentEpisodeNum != null){
+        const ck = 'az/' + currentDetail.id + '/' + currentEpisodeNum + '.vtt';
+        const cr = await fetch(SUPABASE_URL + '/storage/v1/object/public/az-subs/' + ck);
+        if(cr.ok){
+          const ctext = await cr.text();
+          if(ctext && ctext.trim() && parseVttCues(ctext).length){
+            const ct = document.createElement('track');
+            ct.kind = 'subtitles';
+            ct.label = 'Azərbaycanca (AI)';
+            ct.srclang = 'az';
+            ct.src = URL.createObjectURL(new Blob([ctext], { type: 'text/vtt' }));
+            vid.appendChild(ct);
+            if(!currentSubtitleTracks.some(x => x.label === 'Azərbaycanca (AI)')) currentSubtitleTracks.push({ file: ct.src, label: 'Azərbaycanca (AI)' });
+          }
+        }
+      }
+    }catch(e){ /* cache okuma hatası sessiz — buton yine cache-first dener */ }
   };
 
   if(vid.canPlayType('application/vnd.apple.mpegurl') === 'probably'){
