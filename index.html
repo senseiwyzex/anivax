@@ -971,10 +971,25 @@
     <div class="settings-card">
       <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:10px;">
         <div>
-          <div class="settings-row-label">Z.AI API açarı</div>
-          <div class="settings-row-sub">Altyazıyı AZ-a çevirmək üçün z.ai hesabından GLM-4.7-Flash API açarını yapışdırın</div>
+          <div class="settings-row-label">Gemini API açarı</div>
+          <div class="settings-row-sub">aistudio.google.com/apikey saytından Gemini 3.5 Flash-Lite API açarını yapışdırın (yalnız cihazda saxlanılır)</div>
         </div>
-        <input type="password" id="aiApiKeyInput" placeholder="API açarı..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;">
+        <input type="password" id="aiApiKeyInput" placeholder="Gemini API açarı..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;">
+        <div>
+          <div class="settings-row-label">Düşüncə səviyyəsi (variant)</div>
+          <div class="settings-row-sub">Minimal = ən sürətli, High = ən keyfiyyətli</div>
+        </div>
+        <select id="aiThinkingSelect" onchange="saveAiApiKey()" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;">
+          <option value="minimal">Minimal</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+        <div>
+          <div class="settings-row-label">Prompt (istəyə bağlı)</div>
+          <div class="settings-row-sub">Boş buraxsanız standart prompt istifadə olunur</div>
+        </div>
+        <textarea id="aiPromptInput" rows="3" placeholder="Özəl çeviri promptu..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;resize:vertical;"></textarea>
         <div style="display:flex; gap:8px;">
           <button class="btn-primary" style="flex:1;" onclick="saveAiApiKey()" data-i18n="settings.save">Saxla</button>
         </div>
@@ -1323,7 +1338,9 @@ let state = {
   ,subSize: 1.4       // em — altyazı boyutu
   ,subColor: '#ffffff'// altyazı rengi
   ,subBg: 0.75         // altyazı arka plan opaklığı (0 = şeffaf)
-  ,aiKey: ''           // Z.AI (GLM) API anahtarı — kullanıcı tarayıcısında saklanır
+  ,aiKey: ''           // Gemini API anahtarı — kullanıcı tarayıcısında saklanır
+  ,aiThinking: 'low'   // Gemini düşüncə səviyyəsi: minimal | low | medium | high
+  ,aiPrompt: ''        // Özəl çeviri promptu (boş = standart prompt)
 };
 
 // ================= ADMIN AUTH =================
@@ -1709,6 +1726,8 @@ function saveSettings(){
     directOtaku: state.directOtaku || false,
     subBg: state.subBg || 0.75,
     aiKey: state.aiKey || '',
+    aiThinking: state.aiThinking || 'low',
+    aiPrompt: state.aiPrompt || '',
     brokenSources: state.brokenSources || {},
     megavidMissing: state.megavidMissing || {}
   })); }catch(e){}
@@ -1846,16 +1865,22 @@ function renderThemeOptions(){
 function setLang(code){ state.lang = code; applyI18n(); saveSettings(); renderHome(); }
 function setTheme(code){ state.theme = code; applyTheme(); renderThemeOptions(); saveSettings(); }
 
-// Z.AI (GLM) API açarı — yalnızca cihazda saklanır; çeviri istekleri
-// worker /translate ucu üzerinden proxy'lenir, anahtar tarayıcıdan çıkmaz.
+// Gemini API açarı + düşüncə variantı + özəl prompt — yalnızca cihazda saklanır.
 function updateAiApiKeyUI(){
   const input = document.getElementById('aiApiKeyInput');
   if(input) input.value = state.aiKey || '';
+  const sel = document.getElementById('aiThinkingSelect');
+  if(sel) sel.value = state.aiThinking || 'low';
+  const prompt = document.getElementById('aiPromptInput');
+  if(prompt) prompt.value = state.aiPrompt || '';
 }
 function saveAiApiKey(){
   const input = document.getElementById('aiApiKeyInput');
-  if(!input) return;
-  state.aiKey = (input.value || '').trim();
+  if(input) state.aiKey = (input.value || '').trim();
+  const sel = document.getElementById('aiThinkingSelect');
+  if(sel) state.aiThinking = sel.value || 'low';
+  const prompt = document.getElementById('aiPromptInput');
+  if(prompt) state.aiPrompt = (prompt.value || '').trim();
   saveSettings();
   showToast(!!state.aiKey ? (state.lang==='en'?'API key saved':(state.lang==='tr'?'API anahtarı kaydedildi':'API açarı saxlanıldı')) : (state.lang==='en'?'API key removed':(state.lang==='tr'?'API anahtarı kaldırıldı':'API açarı silindi')));
 }
@@ -5908,13 +5933,15 @@ function switchSubtitle(index){
   }
 }
 
-// ================= AI SUBTITLE TRANSLATION (GLM / Z.AI) =================
+// ================= AI SUBTITLE TRANSLATION (Gemini 3.5 Flash-Lite) =================
 let aiSubTranslating = false;
 let aiSubProgress = 0;
 
 // İngilizce altyazıyı AZ'a çevirir; tamamlanınca otomatik olarak yeni track'e
-// geçer. Oynatma pozisyonu bozulmaz (video akışına dokunulmaz). Çeviri worker
-// /translate ucu üzerinden GLM-4.7-Flash'a gider; key tarayıcıda saklanır.
+// geçer. Oynatma pozisyonu bozulmaz (video akışına dokunulmaz). Çeviri doğrudan
+// tarayıcıdan Gemini 3.5 Flash-Lite'a SSE streaming ile gider — tek istekte
+// tüm satırlar çevrilir ama tamamlanan kısım anında ekranda görünür (preview).
+// Key kullanıcı tarayıcısında saklanır.
 async function translateSubtitlesToAz(){
   if(aiSubTranslating) return;
   const vid = document.getElementById('mainVideoEl');
@@ -5930,7 +5957,7 @@ async function translateSubtitlesToAz(){
   }
   const apiKey = (state.aiKey || '').trim();
   if(!apiKey){
-    showToast(state.lang==='en' ? 'Add your Z.AI API key in Settings' : (state.lang==='tr' ? 'Ayarlardan Z.AI API anahtarını ekle' : 'Ayarlardan Z.AI API açarını əlavə edin'));
+    showToast(state.lang==='en' ? 'Add your Gemini API key in Settings' : (state.lang==='tr' ? 'Ayarlardan Gemini API anahtarını ekle' : 'Ayarlardan Gemini API açarını əlavə edin'));
     return;
   }
 
@@ -5964,9 +5991,9 @@ async function translateSubtitlesToAz(){
     const cues = parseVttCues(raw);
     if(!cues.length) throw new Error('vtt-parse');
 
-    // Yeni AI track'ini baştan ekle ve aktif yap — parçalar geldikçe blob
-    // güncellenir, böylece çevirinin tamamı bitmeden tamamlanan kısım ANINDA
-    // ekranda görünür (istep pozisyonu hiç değişmez).
+    // Yeni AI track'ini baştan ekle ve aktif yap — stream parçaları geldikçe
+    // blob güncellenir, böylece çevirinin tamamı bitmeden tamamlanan kısım
+    // ANINDA ekranda görünür (istep pozisyonu hiç değişmez).
     const newIndex = currentSubtitleTracks.length;
     currentSubtitleTracks.push({ file: null, label: 'Azərbaycanca (AI)' });
     const trackEl = document.createElement('track');
@@ -5990,70 +6017,47 @@ async function translateSubtitlesToAz(){
       return URL.createObjectURL(new Blob([vttLines.join('\n')], { type: 'text/vtt' }));
     };
 
-    // Chunk'lar: PARALEL ama ölçülü — ücretsiz modelde aşırı paralellik
-    // rate-limit yaratıp parçaları boş döndürür (İngilizce kalır). 4'lü
-    // paralellik hızı korur, isabet oranını yükseltir.
-    const CHUNK = 12;
-    const PARALLEL = 4;
-    const chunkStarts = [];
-    for(let i=0;i<cues.length;i+=CHUNK) chunkStarts.push(i);
-    let nextChunk = 0;
-    let doneChunks = 0;
-    let lastBlob = null;
+    // Tek istek: TÜM satırlar tek Gemini çağrısında gider; SSE streaming ile
+    // kısmi JSON geldikçe tamamlanan satırlar hemen blob'a işlenir (preview).
+    const systemPrompt = (state.aiPrompt && state.aiPrompt.trim()) ? state.aiPrompt.trim() : DEFAULT_SUB_PROMPT;
+    const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'low';
+    const numbered = original.map((l,i)=> (i+1) + '. ' + l).join('\n');
 
-    async function processChunk(start){
-      const slice = cues.slice(start, start+CHUNK);
-      const lines = slice.map(c => c.text);
-      let translated = null;
-      for(let attempt = 0; attempt < 4 && !translated; attempt++){
-        try{
-          translated = await translateChunkToAz(apiKey, lines);
-        }catch(err){
-          console.error('[ai-sub] chunk ' + start + ' attempt ' + attempt + ':', err && err.message ? err.message : err);
-          if(attempt < 3) await new Promise(r => setTimeout(r, 400));
-        }
-      }
-      if(Array.isArray(translated)){
-        translated.forEach((line, j)=>{ if(line && line.trim()) outLines[start + j] = line; });
-      }
-      doneChunks++;
-      aiSubProgress = Math.min(99, Math.round((doneChunks / chunkStarts.length) * 100));
+    let acc = '';
+    let lastBlob = null;
+    const preview = ()=>{
+      const completed = partialJsonArray(acc);
+      completed.forEach((t, j)=>{
+        if(t && t.trim()) outLines[j] = t.trim();
+      });
+      aiSubProgress = Math.min(99, Math.round((completed.length / cues.length) * 100));
       updateBtn();
-      // Blob'u yenile: çevrilen kısım anında ekranda.
       if(lastBlob) URL.revokeObjectURL(lastBlob);
       lastBlob = buildBlob();
       trackEl.src = lastBlob;
       if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
-    }
+    };
 
-    const workers = Array(Math.min(PARALLEL, chunkStarts.length) || 1).fill(null).map(async ()=>{
-      while(nextChunk < chunkStarts.length){
-        const start = chunkStarts[nextChunk++];
-        await processChunk(start);
-      }
+    await streamGemini(apiKey, systemPrompt, numbered, thinkingLevel, (text)=>{
+      acc = text;
+      preview();
     });
-    await Promise.all(workers);
 
-    // Onarım geçişi: hâlâ boş kalan (çevrilemeyen → İngilizce kalacak) satır
-    // bloklarını yeniden dene. Bu tur, paralel turda rate-limit'e takılan
-    // parçaları yakalar ve AZ kapsamını yükseltir.
-    const missingChunks = [];
-    for(let i=0;i<cues.length;i+=CHUNK){
-      const slice = cues.slice(i, i+CHUNK);
-      if(slice.some((c, j) => !(outLines[i+j] && outLines[i+j].trim()))){
-        missingChunks.push(i);
-      }
+    // Stream bitti — son tamamlanan kısmı işle.
+    preview();
+
+    // Onarım: streaming'de eksik kalan (çevrilemeyen) satırları küçük,
+    // non-streaming bir istekle tamamla — İngilizce satır kalmasın.
+    const missingIdx = [];
+    for(let i=0;i<cues.length;i++){
+      if(!(outLines[i] && outLines[i].trim())) missingIdx.push(i);
     }
-    for(const start of missingChunks){
-      if(start >= cues.length) continue;
-      const slice = cues.slice(start, Math.min(start+CHUNK, cues.length));
-      const missingIdx = slice.map((_, j) => start + j).filter(idx => !(outLines[idx] && outLines[idx].trim()));
-      if(!missingIdx.length) continue;
-      const lines = missingIdx.map(idx => original[idx]);
+    if(missingIdx.length){
+      const missingLines = missingIdx.map(idx => original[idx]);
       let rep = null;
-      for(let attempt = 0; attempt < 2 && !rep; attempt++){
-        try{ rep = await translateChunkToAz(apiKey, lines); }
-        catch(err){ console.error('[ai-sub] repair ' + start + ':', err && err.message ? err.message : err); }
+      for(let attempt = 0; attempt < 3 && !rep; attempt++){
+        try{ rep = await translateChunkToAz(apiKey, missingLines, systemPrompt, thinkingLevel); }
+        catch(err){ console.error('[ai-sub] repair attempt ' + attempt + ':', err && err.message ? err.message : err); if(attempt < 2) await new Promise(r => setTimeout(r, 400)); }
       }
       if(Array.isArray(rep)){
         rep.forEach((line, j)=>{
@@ -6061,9 +6065,6 @@ async function translateSubtitlesToAz(){
           if(idx != null && line && line.trim()) outLines[idx] = line;
         });
       }
-      doneChunks++;
-      aiSubProgress = Math.min(99, Math.round((doneChunks / chunkStarts.length) * 100));
-      updateBtn();
     }
 
     // Kesinleştir: son blob'u kalıcı yap ve track'te göster.
@@ -6089,51 +6090,149 @@ async function translateSubtitlesToAz(){
   }
 }
 
-// Tek hızlı model GLM-4.7-Flash ile (fallback yok) tek chunk çevirir.
-// Yanıt JSON-array olarak istenir; parse önce JSON'a, sonra "N. metin"
-// satırlara, sonra pozisyonel eşlemeye kademeli düşer — hiçbir satır İngilizce
-// kalmasın diye en sağlam algoritma kullanılır.
-async function translateChunkToAz(apiKey, lines){
+// Gemini doğrudan API çağrısı (worker proxy yok) — model Flash-Lite.
+const GEMINI_MODEL = 'gemini-3.5-flash-lite';
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL;
+
+// Prompt alanı boş bırakılırsa kullanılan varsayılan çeviri promptu.
+const DEFAULT_SUB_PROMPT = 'You are a professional Azerbaijani subtitle translator. For the given English anime subtitle lines, return ALL your translations in EXACTLY the following JSON format and nothing else:\n{"translations":["translation of line 1","translation of line 2",...]}\nRules: (1) Natural, idiomatic, fluent Azerbaijani (Azərbaycanca) — as a native speaker, not literal. (2) Keep character names, place names and proper nouns in Latin script as-is. (3) Keep tone (casual, dramatic, playful; respectful "siz" vs familiar "sən"). (4) One array element per input line, in the same order — count must match exactly. (5) Translate sound/effect notes naturally (e.g. "music playing" → "musiqi davam edir"). (6) Do not add notes, explanations or quotes around the content.';
+
+// Gemini SSE streaming: tek istekte tüm satırlar gider, kısmi JSON parçaları
+// geldikçe onText(text) çağrılır. Thinking variantı ve özel prompt desteği var.
+async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onText){
+  const body = {
+    contents: [{ role: 'user', parts: [{ text: userText }] }],
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } }
+    },
+    thinkingConfig: { thinkingLevel: String(thinkingLevel || 'low').toUpperCase() }
+  };
+  const resp = await fetch(GEMINI_BASE + ':streamGenerateContent?alt=sse&key=' + encodeURIComponent(apiKey), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if(!resp.ok){
+    let msg = 'Gemini HTTP ' + resp.status;
+    try{
+      const j = await resp.json();
+      if(j && j.error && j.error.message) msg = j.error.message;
+    }catch(e){}
+    throw new Error(msg);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while(true){
+    const { value, done } = await reader.read();
+    if(done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split('\n\n');
+    buffer = events.pop();
+    for(const ev of events){
+      const line = ev.split('\n').find(l => l.startsWith('data:'));
+      if(!line) continue;
+      const payload = line.slice(5).trim();
+      if(!payload || payload === '[DONE]') continue;
+      try{
+        const j = JSON.parse(payload);
+        const parts = j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
+        if(Array.isArray(parts)){
+          let text = '';
+          for(const p of parts){
+            if(p && !p.thought && p.text) text += p.text;
+          }
+          if(text) onText(text);
+        }
+      }catch(e){}
+    }
+  }
+  if(buffer.trim()){
+    const line = buffer.split('\n').find(l => l.startsWith('data:'));
+    if(line){
+      const payload = line.slice(5).trim();
+      if(payload && payload !== '[DONE]'){
+        try{
+          const j = JSON.parse(payload);
+          const parts = j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
+          if(Array.isArray(parts)){
+            let text = '';
+            for(const p of parts){ if(p && !p.thought && p.text) text += p.text; }
+            if(text) onText(text);
+          }
+        }catch(e){}
+      }
+    }
+  }
+}
+
+// Akış halindeki kısmi JSON'dan TAMAMLANMIŞ string elemanlarını çıkarır.
+// Dizi henüz kapanmamış olabilir; biten elemanlar önizlemeye düşer.
+function partialJsonArray(text){
+  const out = [];
+  const start = text.indexOf('[');
+  if(start < 0) return out;
+  let i = start + 1;
+  let cur = '';
+  let inStr = false;
+  let esc = false;
+  while(i < text.length){
+    const ch = text[i];
+    if(inStr){
+      if(esc){ cur += ch; esc = false; }
+      else if(ch === '\\'){ esc = true; }
+      else if(ch === '"'){ out.push(cur); cur = ''; inStr = false; }
+      else cur += ch;
+    } else {
+      if(ch === '"'){ inStr = true; }
+      else if(ch === ']'){ break; }
+    }
+    i++;
+  }
+  return out;
+}
+
+// Repair: streaming'de kaçan satırlar için non-streaming Gemini çağrısı.
+// Yanıt JSON-array olarak istenir; parse tam dizi → {"translations":[...]}
+// → kısmi dizi sırasıyla düşer.
+async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel){
   const numbered = lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
   const body = {
-    apiKey,
-    model: 'glm-4.7-flash',
-    thinking: { type: 'disabled' },
-    max_tokens: 4096,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: 'You are a professional Azerbaijani subtitle translator. For the given English anime subtitle lines, return ALL your translations in EXACTLY the following JSON format and nothing else:\n{"translations":["translation of line 1","translation of line 2",...]}\nRules: (1) Natural, idiomatic, fluent Azerbaijani (Azərbaycanca) — as a native speaker, not literal. (2) Keep character names, place names and proper nouns in Latin script as-is. (3) Keep tone (casual, dramatic, playful; respectful "siz" vs familiar "sən"). (4) One array element per input line, in the same order — count must match exactly. (5) Translate sound/effect notes naturally (e.g. "music playing" → "musiqi davam edir"). (6) Do not add notes, explanations or quotes around the content.'
-      },
-      { role: 'user', content: numbered }
-    ]
+    contents: [{ role: 'user', parts: [{ text: numbered }] }],
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } }
+    },
+    thinkingConfig: { thinkingLevel: String(thinkingLevel || 'low').toUpperCase() }
   };
-  const resp = await fetch(TRANSLATE_ENDPOINT, {
+  const resp = await fetch(GEMINI_BASE + ':generateContent?key=' + encodeURIComponent(apiKey), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
   const json = await resp.json().catch(()=>null);
-  if(!resp.ok || !json || typeof json.content !== 'string'){
-    throw new Error(json && json.error ? json.error : 'upstream');
+  if(!resp.ok || !json){
+    throw new Error(json && json.error && json.error.message ? json.error.message : 'Gemini HTTP ' + resp.status);
+  }
+  let content = '';
+  const parts = json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts;
+  if(Array.isArray(parts)){
+    for(const p of parts){ if(p && !p.thought && p.text) content += p.text; }
   }
 
-  // 1) JSON-array doğrudan
-  let arr = tryParseJsonArray(json.content);
+  // 1) Tam JSON-array
+  let arr = tryParseJsonArray(content);
   // 2) {"translations":[...]} nesnesi
   if(!arr){
-    const obj = tryParseJsonObject(json.content);
+    const obj = tryParseJsonObject(content);
     if(obj && Array.isArray(obj.translations)) arr = obj.translations;
   }
-  // 3) "N. metin" satırlar
-  if(!arr){
-    arr = [];
-    json.content.split('\n').forEach(line=>{
-      const m = line.match(/^\s*(\d+)[.)]?\s*(.*)$/);
-      if(m && (m[2]||'').trim()) arr[parseInt(m[1],10)-1] = m[2].trim();
-    });
-  }
+  // 3) Kısmi dizi (stream kesilmişse tamamlananlar)
+  if(!arr) arr = partialJsonArray(content);
+
   const out = new Array(lines.length);
   if(Array.isArray(arr)){
     arr.forEach((t, j)=>{
@@ -6141,14 +6240,9 @@ async function translateChunkToAz(apiKey, lines){
       if(text) out[j] = text;
     });
   }
-  // Kaçırılan satırlar orijinal metni koru (align bozulmasın) — kullanıcıya
-  // İngilizce parça kalmamalı, en kötü ihtimalle üst seviye retry ile tekrar.
   for(let i=0;i<lines.length;i++){
-    if(!out[i]){
-      out[i] = '';
-    }
+    if(!out[i]) out[i] = '';
   }
-  // Eğer hiçbir satır çevrilmediyse model bozuk/uyumsuz yanıt üretmiş → retry.
   if(out.every(t => !t)) throw new Error('no-parse');
   return out;
 }
