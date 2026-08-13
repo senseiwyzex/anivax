@@ -33,14 +33,13 @@ const COOLDOWN_DAILY_MS = 24 * 60 * 60 * 1000;
 const MAX_ESCALATION = 7;
 
 // Deno isolate yaşadığı sürece yaşayan in-memory durum.
-// Supabase edge function'ları istek başına yeni isolate kurabilir — bu yüzden
-// bu durum "best-effort"tır: tek üretim başarısızlık senaryosu bir key'in bir
-// kez fazladan 429 yemesi, o da MIN_GAP pacing ile engellenir (ban riski yok).
+// DİKKAT: Supabase edge function'ları istek başına TAZE isolate kurabilir —
+// in-memory sayaç/cooldown yalnızca "ek" koruma, asıl dağıtım aşağıdaki
+// zaman tabanlı slot'tur (tüm isolate'lar için deterministik).
 const S = (globalThis as any).__geminiProxyState as any || {
-  lastUsed: [] as number[],      // per-key son kullanım ms
-  cooldownUntil: [] as number[], // per-key cooldown bitiş ms
-  strike: [] as number[],        // per-key art arda hata sayısı
-  cursor: 0,                     // round-robin sayaç
+  lastUsed: [] as number[],      // per-key son kullanım ms (warm isolate)
+  cooldownUntil: [] as number[], // per-key cooldown bitiş ms (warm isolate)
+  strike: [] as number[],        // per-key art arda hata sayısı (warm isolate)
 };
 (globalThis as any).__geminiProxyState = S;
 
@@ -57,17 +56,22 @@ function json(data: any, status: number, headers: Record<string, string> = {}) {
   });
 }
 
-// En uygun key'i seçer: sıradaki müsait olan; hepsi müsait değilse en erken
-// boşalacak olan. waitMs > 0 ise çağıran o kadar beklemeli.
-function pickKey(count: number): { idx: number; waitMs: number } {
+// Zaman tabanlı slot: her MIN_GAP_MS penceresinde farklı key seçilir. Bu,
+// isolate yaşam döngüsünden BAĞIMSIZ çalışır — 7 key ve 4s pencere ile key
+// başına ~1 istek/4s (~15 RPM sınırının güvenli altında) garantilenir.
+// Örnek: now=0s→key0, 4s→key1, 8s→key2, ... 28s→key0.
+function slotKey(count: number): number {
+  return Math.floor(Date.now() / MIN_GAP_MS) % count;
+}
+
+// Warm isolate'da ek doğrulama: seçilen key hâlâ cooldown'daysa bir sonraki
+// müsait key'e atla (soğuk başlangıçta her şey müsait → slot korunur).
+function pickKey(count: number, preferred: number): { idx: number; waitMs: number } {
   const now = Date.now();
   for (let i = 0; i < count; i++) {
-    const idx = (S.cursor + i) % count;
+    const idx = (preferred + i) % count;
     const readyAt = Math.max(S.lastUsed[idx] || 0, S.cooldownUntil[idx] || 0);
-    if (readyAt <= now) {
-      S.cursor = (idx + 1) % count;
-      return { idx, waitMs: 0 };
-    }
+    if (readyAt <= now) return { idx, waitMs: 0 };
   }
   // Hepsi meşgul → en erken boşalacak olanı seç.
   let best = 0;
@@ -76,7 +80,6 @@ function pickKey(count: number): { idx: number; waitMs: number } {
     const readyAt = Math.max(S.lastUsed[i] || 0, S.cooldownUntil[i] || 0);
     if (readyAt < bestAt) { bestAt = readyAt; best = i; }
   }
-  S.cursor = (best + 1) % count;
   return { idx: best, waitMs: Math.max(0, bestAt - now) };
 }
 
@@ -118,7 +121,7 @@ Deno.serve(async (req) => {
   let lastErr = 'unknown error';
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const { idx, waitMs } = pickKey(k.length);
+    const { idx, waitMs } = pickKey(k.length, slotKey(k.length));
 
     // Tüm key'ler cooldown'da → istemciye retry bildir. Ban riski sıfır.
     if (waitMs > 5000) {
