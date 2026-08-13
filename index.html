@@ -1339,7 +1339,7 @@ let state = {
   ,subColor: '#ffffff'// altyazı rengi
   ,subBg: 0.75         // altyazı arka plan opaklığı (0 = şeffaf)
   ,aiKey: ''           // Gemini API anahtarı — kullanıcı tarayıcısında saklanır
-  ,aiThinking: 'low'   // Gemini düşüncə səviyyəsi: minimal | low | medium | high
+  ,aiThinking: 'minimal' // Gemini düşüncə səviyyəsi: minimal | low | medium | high
   ,aiPrompt: ''        // Özəl çeviri promptu (boş = standart prompt)
 };
 
@@ -1726,7 +1726,7 @@ function saveSettings(){
     directOtaku: state.directOtaku || false,
     subBg: state.subBg || 0.75,
     aiKey: state.aiKey || '',
-    aiThinking: state.aiThinking || 'low',
+    aiThinking: state.aiThinking || 'minimal',
     aiPrompt: state.aiPrompt || '',
     brokenSources: state.brokenSources || {},
     megavidMissing: state.megavidMissing || {}
@@ -1870,7 +1870,7 @@ function updateAiApiKeyUI(){
   const input = document.getElementById('aiApiKeyInput');
   if(input) input.value = state.aiKey || '';
   const sel = document.getElementById('aiThinkingSelect');
-  if(sel) sel.value = state.aiThinking || 'low';
+  if(sel) sel.value = state.aiThinking || 'minimal';
   const prompt = document.getElementById('aiPromptInput');
   if(prompt) prompt.value = state.aiPrompt || '';
 }
@@ -1878,7 +1878,7 @@ function saveAiApiKey(){
   const input = document.getElementById('aiApiKeyInput');
   if(input) state.aiKey = (input.value || '').trim();
   const sel = document.getElementById('aiThinkingSelect');
-  if(sel) state.aiThinking = sel.value || 'low';
+  if(sel) state.aiThinking = sel.value || 'minimal';
   const prompt = document.getElementById('aiPromptInput');
   if(prompt) state.aiPrompt = (prompt.value || '').trim();
   saveSettings();
@@ -6020,17 +6020,21 @@ async function translateSubtitlesToAz(){
     // Tek istek: TÜM satırlar tek Gemini çağrısında gider; SSE streaming ile
     // kısmi JSON geldikçe tamamlanan satırlar hemen blob'a işlenir (preview).
     const systemPrompt = (state.aiPrompt && state.aiPrompt.trim()) ? state.aiPrompt.trim() : DEFAULT_SUB_PROMPT;
-    const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'low';
+    const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal';
     const numbered = original.map((l,i)=> (i+1) + '. ' + l).join('\n');
 
     let acc = '';
     let lastBlob = null;
+    let lastCompleted = 0;
     const preview = ()=>{
       const completed = partialJsonArray(acc);
+      // Yeni tamamlanan satır var mı? Yoksa blob'u yeniden kurmaya gerek yok.
+      if(completed.length <= lastCompleted) return;
+      lastCompleted = completed.length;
       completed.forEach((t, j)=>{
         if(t && t.trim()) outLines[j] = t.trim();
       });
-      aiSubProgress = Math.min(99, Math.round((completed.length / cues.length) * 100));
+      aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
       updateBtn();
       if(lastBlob) URL.revokeObjectURL(lastBlob);
       lastBlob = buildBlob();
@@ -6104,9 +6108,7 @@ async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onTex
     contents: [{ role: 'user', parts: [{ text: userText }] }],
     systemInstruction: { parts: [{ text: systemPrompt }] },
     generationConfig: {
-      responseMimeType: 'application/json',
-      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } },
-      thinkingConfig: { thinkingLevel: String(thinkingLevel || 'low').toUpperCase() }
+      thinkingConfig: { thinkingLevel: String(thinkingLevel || 'minimal').toUpperCase() }
     }
   };
   const resp = await fetch(GEMINI_BASE + ':streamGenerateContent?alt=sse&key=' + encodeURIComponent(apiKey), {
@@ -6125,6 +6127,7 @@ async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onTex
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let acc = '';
   while(true){
     const { value, done } = await reader.read();
     if(done) break;
@@ -6144,7 +6147,11 @@ async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onTex
           for(const p of parts){
             if(p && !p.thought && p.text) text += p.text;
           }
-          if(text) onText(text);
+          if(text){
+            // Gemini SSE'de text kümülatif gelir; yine de delta gelirse topla.
+            acc = acc && text.startsWith(acc) ? text : acc + text;
+            onText(acc);
+          }
         }
       }catch(e){}
     }
@@ -6160,7 +6167,10 @@ async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onTex
           if(Array.isArray(parts)){
             let text = '';
             for(const p of parts){ if(p && !p.thought && p.text) text += p.text; }
-            if(text) onText(text);
+            if(text){
+              acc = acc && text.startsWith(acc) ? text : acc + text;
+              onText(acc);
+            }
           }
         }catch(e){}
       }
@@ -6205,7 +6215,7 @@ async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel){
     generationConfig: {
       responseMimeType: 'application/json',
       responseSchema: { type: 'ARRAY', items: { type: 'STRING' } },
-      thinkingConfig: { thinkingLevel: String(thinkingLevel || 'low').toUpperCase() }
+      thinkingConfig: { thinkingLevel: String(thinkingLevel || 'minimal').toUpperCase() }
     }
   };
   const resp = await fetch(GEMINI_BASE + ':generateContent?key=' + encodeURIComponent(apiKey), {
