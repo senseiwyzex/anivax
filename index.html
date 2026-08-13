@@ -6240,10 +6240,7 @@ async function translateSubtitlesToAz(){
     let acc = '';
     let lastBlob = null;
     let lastCompleted = 0;
-    // KAYMA KÖKTEN ÇÖZÜMÜ: outLines'a yazma YALNIZCA eleman sayısı cue sayısına
-    // DƏQİQ eşit olan tam array'dan yapılır. Model bir satırı birleştirir/bölerse
-    // kısmi yazım yapılmadığı için ekranda hiçbir zaman kaymış görünmez; stream
-    // sonunda tam dizi + full retry/repair devreye girer.
+    // Tam JSON-array geldiğinde birebir (sıralı) doldur — KESİN hizalama.
     const fillFromArray = (arr)=>{
       if(!Array.isArray(arr) || arr.length !== cues.length) return false;
       for(let i=0;i<arr.length;i++){
@@ -6251,24 +6248,35 @@ async function translateSubtitlesToAz(){
       }
       return true;
     };
+    const render = ()=>{
+      if(lastBlob) URL.revokeObjectURL(lastBlob);
+      lastBlob = buildBlob();
+      trackEl.src = lastBlob;
+      if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
+    };
     const preview = ()=>{
-      // İlerleme göstergesi: tamamlanan element sayısı (yazmadan sadece gösterge).
-      const completed = partialJsonArray(acc);
-      if(completed.length > lastCompleted) lastCompleted = completed.length;
-      // Tam dizi geldiyse birebir (sıralı) doldur — satır kayması imkânsız.
+      // 1) Tam dizi geldiyse birebir (sıralı) doldur — kayma imkânsız, KESİN.
       const full = tryParseJsonArray(acc);
       if(fillFromArray(full)){
         lastCompleted = cues.length;
         aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
         updateBtn();
-        if(lastBlob) URL.revokeObjectURL(lastBlob);
-        lastBlob = buildBlob();
-        trackEl.src = lastBlob;
-        if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
+        render();
         return;
       }
-      aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
-      updateBtn();
+      // 2) Tam dizi yoksa kısmi JSON'dan tamamlanan satırları SIRALI yaz (preview).
+      //    Model bir satırı birleştirirse son satırlar boş kalır ve stream sonunda
+      //    full retry devreye girip tümünü doğru hizalar — geçici kayma olmaz.
+      const completed = partialJsonArray(acc);
+      if(completed.length > lastCompleted){
+        lastCompleted = completed.length;
+        completed.forEach((t, j)=>{
+          if(t && t.trim() && j < cues.length) outLines[j] = t.trim();
+        });
+        aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
+        updateBtn();
+        render();
+      }
     };
 
     await streamGemini(apiKey, systemPrompt, numbered, effectiveLevel, (text)=>{
