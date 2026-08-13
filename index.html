@@ -784,13 +784,22 @@
   <!-- TAB: System settings -->
   <div id="adminTab-system" class="admin-tab-panel hidden">
     <div class="settings-group" style="margin-top:16px;">
+      <div class="settings-label">Global AI Altyazı Modeli</div>
+      <div class="settings-card">
+        <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:10px;">
+          <div class="settings-row-sub">Bu model site_config tablosundan HERKES için kullanılır (örn. gemini-3.5-flash-lite, gemini-2.5-flash). Kullanıcı kendi API anahtarını girerse kendi model seçimini de kullanabilir. Boş bırakılırsa varsayılan model kullanılır. Model değişince herkesin çevirisi YENİ modelle yapılır; eski cache'ler geçersiz olur.</div>
+          <input id="adminModelInput" type="text" placeholder="gemini-3.5-flash-lite" spellcheck="false" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:12.5px;outline:none;font-family:inherit;">
+        </div>
+      </div>
+    </div>
+    <div class="settings-group">
       <div class="settings-label">Global AI Altyazı Promptu</div>
       <div class="settings-card">
         <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:10px;">
           <div class="settings-row-sub">Bu prompt site_config tablosundan HERKES için kullanılır. Kullanıcı kendi prompt'unu girerse onunki geçerli olur. Boş bırakılırsa varsayılan prompt kullanılır.</div>
           <textarea id="adminSubPromptInput" rows="8" placeholder="Global çeviri promptu..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:12.5px;outline:none;resize:vertical;font-family:inherit;"></textarea>
           <div style="display:flex; gap:8px;">
-            <button class="btn-primary" style="flex:1;" onclick="saveAdminSubPrompt()">Promptu Kaydet</button>
+            <button class="btn-primary" style="flex:1;" onclick="saveAdminSubPrompt()">Model + Promptu Kaydet</button>
             <button class="btn-ghost" onclick="resetAdminSubPrompt()">Varsayılan</button>
           </div>
         </div>
@@ -1001,6 +1010,11 @@
           <option value="high">High</option>
         </select>
         <div>
+          <div class="settings-row-label">Model (istəyə bağlı)</div>
+          <div class="settings-row-sub">Boş buraxsanız adminin təyin etdiyi qlobal model (varsayılan: gemini-3.5-flash-lite) istifadə olunur</div>
+        </div>
+        <input type="text" id="aiModelInput" placeholder="gemini-3.5-flash-lite" spellcheck="false" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;font-family:inherit;">
+        <div>
           <div class="settings-row-label">Prompt (istəyə bağlı)</div>
           <div class="settings-row-sub">Boş buraxsanız standart prompt istifadə olunur</div>
         </div>
@@ -1147,6 +1161,7 @@ function sourceEnabled(name){
 // kullanılır. Boşsa/yoksa DEFAULT_SUB_PROMPT'e düşer. Tek satırlık read, çeviri
 // başına ek istek yok — sayfa açılışında bir kez çekilir (sources ile birlikte).
 let globalSubPrompt = '';
+let globalModel = '';
 async function loadGlobalSubPrompt(){
   if(!sbReady()) return;
   try{
@@ -1155,11 +1170,18 @@ async function loadGlobalSubPrompt(){
       globalSubPrompt = data.data.prompt;
     }
   }catch(e){ console.warn('loadGlobalSubPrompt:', e); }
+  try{
+    const { data, error } = await withTimeout(sb.from('site_config').select('data').eq('key','ai_model').maybeSingle(), 4000);
+    if(!error && data && data.data && typeof data.data.model === 'string' && data.data.model.trim()){
+      globalModel = data.data.model.trim();
+    }
+  }catch(e){ console.warn('loadGlobalModel:', e); }
 }
 async function saveGlobalSubPrompt(){
   if(!sbReady()) return;
   try{
     await withTimeout(sb.from('site_config').upsert({ key:'sub_prompt', data:{ prompt: globalSubPrompt }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
+    await withTimeout(sb.from('site_config').upsert({ key:'ai_model', data:{ model: globalModel }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
   }catch(e){ console.warn('saveGlobalSubPrompt:', e); }
 }
 // Sıralama korunur: Otakuhg (en hızlı) → Bibiemb → Otakuvid. Admin kapatılan
@@ -1377,6 +1399,7 @@ let state = {
   ,aiKey: ''           // Gemini API anahtarı — kullanıcı tarayıcısında saklanır
   ,aiThinking: 'minimal' // Gemini düşüncə səviyyəsi: minimal | low | medium | high
   ,aiPrompt: ''        // Özəl çeviri promptu (boş = standart prompt)
+  ,aiModel: ''         // Özəl Gemini modeli (boş = qlobal/varsayılan model)
 };
 
 // ================= ADMIN AUTH =================
@@ -1766,6 +1789,7 @@ function saveSettings(){
     aiKey: state.aiKey || '',
     aiThinking: state.aiThinking || 'minimal',
     aiPrompt: state.aiPrompt || '',
+    aiModel: state.aiModel || '',
     brokenSources: state.brokenSources || {},
     megavidMissing: state.megavidMissing || {}
   })); }catch(e){}
@@ -1903,7 +1927,7 @@ function renderThemeOptions(){
 function setLang(code){ state.lang = code; applyI18n(); saveSettings(); renderHome(); }
 function setTheme(code){ state.theme = code; applyTheme(); renderThemeOptions(); saveSettings(); }
 
-// Gemini API açarı + düşüncə variantı + özəl prompt — yalnızca cihazda saklanır.
+// Gemini API açarı + düşüncə variantı + özəl prompt + özəl model — yalnızca cihazda saklanır.
 function updateAiApiKeyUI(){
   const input = document.getElementById('aiApiKeyInput');
   if(input) input.value = state.aiKey || '';
@@ -1911,6 +1935,8 @@ function updateAiApiKeyUI(){
   if(sel) sel.value = state.aiThinking || 'minimal';
   const prompt = document.getElementById('aiPromptInput');
   if(prompt) prompt.value = state.aiPrompt || '';
+  const model = document.getElementById('aiModelInput');
+  if(model) model.value = state.aiModel || '';
 }
 function saveAiApiKey(){
   const input = document.getElementById('aiApiKeyInput');
@@ -1919,6 +1945,8 @@ function saveAiApiKey(){
   if(sel) state.aiThinking = sel.value || 'minimal';
   const prompt = document.getElementById('aiPromptInput');
   if(prompt) state.aiPrompt = (prompt.value || '').trim();
+  const model = document.getElementById('aiModelInput');
+  if(model) state.aiModel = (model.value || '').trim();
   saveSettings();
   showToast(!!state.aiKey ? (state.lang==='en'?'API key saved':(state.lang==='tr'?'API anahtarı kaydedildi':'API açarı saxlanıldı')) : (state.lang==='en'?'API key removed':(state.lang==='tr'?'API anahtarı kaldırıldı':'API açarı silindi')));
 }
@@ -2084,7 +2112,31 @@ function clearTranslationCache(){
   if(!requireAdmin()) return;
   translationCache = {};
   saveTranslationCache();
-  showToast(state.lang==='en' ? 'Translation cache cleared' : (state.lang==='tr' ? 'Önbellek temizlendi' : 'Keş təmizləndi'));
+  // Supabase Storage'daki AI altyazı cache'ini (az-subs) de temizle — admin
+  // "Varsayılan"/yeni model+prompt sonrası eski çevirilerin kullanılmasını önler.
+  (async ()=>{
+    let removed = 0;
+    try{
+      const listResp = await fetch(SUPABASE_URL + '/storage/v1/object/list/az-subs', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefix: 'az/', limit: 1000, paginate: false })
+      });
+      if(listResp.ok){
+        const items = await listResp.json();
+        if(Array.isArray(items) && items.length){
+          const names = items.map(it => it.name).filter(Boolean);
+          const delResp = await fetch(SUPABASE_URL + '/storage/v1/object/az-subs', {
+            method: 'DELETE',
+            headers: { 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prefixes: names.map(n => 'az/' + n) })
+          });
+          if(delResp.ok) removed = names.length;
+        }
+      }
+    }catch(e){ console.error('[ai-sub] storage cache clear failed', e); }
+    showToast(state.lang==='en' ? ('Translation cache cleared' + (removed ? ' (+' + removed + ' AI)' : '')) : (state.lang==='tr' ? ('Önbellek temizlendi' + (removed ? ' (+' + removed + ' AI)' : '')) : ('Keş təmizləndi' + (removed ? ' (+' + removed + ' AI)' : ''))));
+  })();
 }
 
 async function translateText(text, targetLang){
@@ -3279,24 +3331,30 @@ function renderAdminDashboard(){
   refreshDirectOtakuBtn();
   const prompEl = document.getElementById('adminSubPromptInput');
   if(prompEl) prompEl.value = globalSubPrompt;
+  const modelEl = document.getElementById('adminModelInput');
+  if(modelEl) modelEl.value = globalModel;
  }
 
  function saveAdminSubPrompt(){
   if(!requireAdmin()) return;
   const el = document.getElementById('adminSubPromptInput');
-  if(!el) return;
-  globalSubPrompt = el.value.trim();
+  const mel = document.getElementById('adminModelInput');
+  globalSubPrompt = el ? el.value.trim() : '';
+  if(mel) globalModel = mel.value.trim();
   saveGlobalSubPrompt();
-  showToast(state.lang==='en' ? 'Global AI prompt saved for everyone' : (state.lang==='tr' ? 'Global AI promptu herkes için kaydedildi' : 'Qlobal AI promptu hamı üçün saxlanıldı'));
+  showToast(state.lang==='en' ? 'Global AI model + prompt saved for everyone' : (state.lang==='tr' ? 'Global AI model + promptu herkes için kaydedildi' : 'Qlobal AI model + promptu hamı üçün saxlanıldı'));
  }
 
  function resetAdminSubPrompt(){
   if(!requireAdmin()) return;
   globalSubPrompt = '';
+  globalModel = '';
   saveGlobalSubPrompt();
   const el = document.getElementById('adminSubPromptInput');
   if(el) el.value = '';
-  showToast(state.lang==='en' ? 'Global AI prompt reset to default' : (state.lang==='tr' ? 'Global AI promptu varsayılana döndü' : 'Qlobal AI promptu standarta qayıtdı'));
+  const mel = document.getElementById('adminModelInput');
+  if(mel) mel.value = '';
+  showToast(state.lang==='en' ? 'Global AI model + prompt reset to default' : (state.lang==='tr' ? 'Global AI model + promptu varsayılana döndü' : 'Qlobal AI model + promptu standarta qayıtdı'));
  }
 
 function refreshDirectOtakuBtn(){
@@ -5645,22 +5703,41 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
     }
     // Önceden çevrilmişse (Supabase Storage cache) "Azərbaycanca (AI)" track'ini
     // otomatik listeye ekle — sayfa yenilense de kullanıcı seçebilsin. Cache hit
-    // = sıfır Gemini isteği.
+    // = sıfır Gemini isteği. Anahtar, translateSubtitlesToAz ile aynı hash'i kullanır.
     try{
       if(currentDetail && currentDetail.id && currentEpisodeNum != null){
-        const ck = 'az/' + currentDetail.id + '/' + currentEpisodeNum + '.vtt';
-        const cr = await fetch(SUPABASE_URL + '/storage/v1/object/public/az-subs/' + ck);
-        if(cr.ok){
-          const ctext = await cr.text();
-          if(ctext && ctext.trim() && parseVttCues(ctext).length){
-            const ct = document.createElement('track');
-            ct.kind = 'subtitles';
-            ct.label = 'Azərbaycanca (AI)';
-            ct.srclang = 'az';
-            ct.src = URL.createObjectURL(new Blob([ctext], { type: 'text/vtt' }));
-            vid.appendChild(ct);
-            if(!currentSubtitleTracks.some(x => x.label === 'Azərbaycanca (AI)')) currentSubtitleTracks.push({ file: ct.src, label: 'Azərbaycanca (AI)' });
+        const effModel = (state.aiModel && state.aiModel.trim()) ? state.aiModel.trim() : (globalModel || GEMINI_MODEL);
+        const userPrompt = (state.aiPrompt && state.aiPrompt.trim()) ? state.aiPrompt.trim() : '';
+        // Yazma sırasında globalSubPrompt yüklenmemiş olabilir; her iki hash'i de
+        // dene (varsayılan prompt / global prompt) — hangisiyle yazıldıysa okunur.
+        const candidates = [
+          subCacheHash(effModel, userPrompt || DEFAULT_SUB_PROMPT),
+          subCacheHash(effModel, userPrompt || globalSubPrompt || DEFAULT_SUB_PROMPT)
+        ];
+        const seen = new Set();
+        let found = null;
+        for(const h of candidates){
+          if(seen.has(h)) continue;
+          seen.add(h);
+          const ck = 'az/' + currentDetail.id + '/' + currentEpisodeNum + '-' + h + '.vtt';
+          const cr = await fetch(SUPABASE_URL + '/storage/v1/object/public/az-subs/' + ck);
+          if(cr.ok){
+            const ctext = await cr.text();
+            if(ctext && ctext.trim() && parseVttCues(ctext).length){
+              found = ctext;
+              break;
+            }
           }
+        }
+        if(found){
+          const ctext = found;
+          const ct = document.createElement('track');
+          ct.kind = 'subtitles';
+          ct.label = 'Azərbaycanca (AI)';
+          ct.srclang = 'az';
+          ct.src = URL.createObjectURL(new Blob([ctext], { type: 'text/vtt' }));
+          vid.appendChild(ct);
+          if(!currentSubtitleTracks.some(x => x.label === 'Azərbaycanca (AI)')) currentSubtitleTracks.push({ file: ct.src, label: 'Azərbaycanca (AI)' });
         }
       }
     }catch(e){ /* cache okuma hatası sessiz — buton yine cache-first dener */ }
@@ -6041,19 +6118,43 @@ async function translateSubtitlesToAz(){
     return;
   }
   const apiKey = (state.aiKey || '').trim();
+  // Model/prompt önceliği (cache anahtarı da buna bağlı — değişirse cache geçersiz olur).
+  const aiModel = (state.aiModel && state.aiModel.trim())
+    ? state.aiModel.trim()
+    : (globalModel || GEMINI_MODEL);
+  const systemPrompt = (state.aiPrompt && state.aiPrompt.trim())
+    ? state.aiPrompt.trim()
+    : (globalSubPrompt || DEFAULT_SUB_PROMPT);
 
-  // Cache anahtarı: az/{animeId}/{ep}.vtt — aynı bölüm daha önce çevrildiyse
-  // Gemini'ye hiç gitmeden cache'ten yükle (anında, maliyetsiz).
+  // Cache anahtarı: az/{animeId}/{ep}-{m}{p}.vtt — model ya da prompt değişince
+  // farklı hash → eski çeviri cache'te kalsa bile yeni model/promptla çevrilir.
+  const cacheHash = subCacheHash(aiModel, systemPrompt);
   const cachePath = (currentDetail && currentDetail.id && currentEpisodeNum != null)
-    ? ('az/' + currentDetail.id + '/' + currentEpisodeNum + '.vtt')
+    ? ('az/' + currentDetail.id + '/' + currentEpisodeNum + '-' + cacheHash + '.vtt')
     : null;
   if(cachePath){
     try{
-      const cachedResp = await fetch(SUPABASE_URL + '/storage/v1/object/public/az-subs/' + cachePath);
-      if(cachedResp.ok){
-        const cachedVtt = await cachedResp.text();
-        const cachedCues = parseVttCues(cachedVtt);
-        if(cachedCues && cachedCues.length){
+      // globalSubPrompt mount sırasında henüz yüklenmemiş olabilir → aynı çeviri
+      // varsayılan prompt hash'iyle de yazılmış olabilir. İki adayı da dene.
+      const userPrompt = (state.aiPrompt && state.aiPrompt.trim()) ? state.aiPrompt.trim() : '';
+      const candidates = [
+        cacheHash,
+        subCacheHash(aiModel, userPrompt || DEFAULT_SUB_PROMPT)
+      ];
+      const seen = new Set();
+      let cachedVtt = null;
+      for(const h of candidates){
+        if(seen.has(h)) continue;
+        seen.add(h);
+        try{
+          const cachedResp = await fetch(SUPABASE_URL + '/storage/v1/object/public/az-subs/' + 'az/' + currentDetail.id + '/' + currentEpisodeNum + '-' + h + '.vtt');
+          if(cachedResp.ok){
+            const t = await cachedResp.text();
+            if(t && t.trim() && parseVttCues(t).length){ cachedVtt = t; break; }
+          }
+        }catch(e){}
+      }
+      if(cachedVtt){
           currentSubtitleTracks = currentSubtitleTracks.filter(t => t.label !== 'Azərbaycanca (AI)');
           if(vid && vid.querySelectorAll){
             vid.querySelectorAll('track').forEach(t => {
@@ -6069,7 +6170,6 @@ async function translateSubtitlesToAz(){
           switchSubtitle(ci);
           showToast(state.lang==='en' ? 'Loaded AZ subtitles (cached) ✓' : (state.lang==='tr' ? 'AZ altyazı cacheten yüklendi ✓' : 'AZ altyazı keşdən yükləndi ✓'));
           return;
-        }
       }
     }catch(e){ /* cache miss — çevirmeye devam */ }
   }
@@ -6151,10 +6251,7 @@ async function translateSubtitlesToAz(){
 
     // Tek istek: TÜM satırlar tek Gemini çağrısında gider; SSE streaming ile
     // kısmi JSON geldikçe tamamlanan satırlar hemen blob'a işlenir (preview).
-    // Prompt önceliği: kullanıcının kendi prompt'u → admin'in global prompt'u → varsayılan.
-    const systemPrompt = (state.aiPrompt && state.aiPrompt.trim())
-      ? state.aiPrompt.trim()
-      : (globalSubPrompt || DEFAULT_SUB_PROMPT);
+    // Prompt önceliği yukarıda cacheHash için hesaplandı (systemPrompt/aiModel).
   const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal';
   // Paylaşımlı havuz (proxy) HIGH kullanır; kendi key'i olan kullanıcı selector'ü.
   const effectiveLevel = apiKey ? thinkingLevel : 'high';
@@ -6163,7 +6260,10 @@ async function translateSubtitlesToAz(){
     let acc = '';
     let lastBlob = null;
     let lastCompleted = 0;
-    // Tam JSON-array geldiğinde birebir (sıralı) doldur — satır kayması imkânsız.
+    // KAYMA KÖKTEN ÇÖZÜMÜ: outLines'a yazma YALNIZCA eleman sayısı cue sayısına
+    // DƏQİQ eşit olan tam array'dan yapılır. Model bir satırı birleştirir/bölerse
+    // kısmi yazım yapılmadığı için ekranda hiçbir zaman kaymış görünmez; stream
+    // sonunda tam dizi + full retry/repair devreye girer.
     const fillFromArray = (arr)=>{
       if(!Array.isArray(arr) || arr.length !== cues.length) return false;
       for(let i=0;i<arr.length;i++){
@@ -6172,33 +6272,23 @@ async function translateSubtitlesToAz(){
       return true;
     };
     const preview = ()=>{
-      // 1) Tam dizi parse et: eleman sayısı cue sayısıyla eşleşiyorsa birebir ata.
+      // İlerleme göstergesi: tamamlanan element sayısı (yazmadan sadece gösterge).
+      const completed = partialJsonArray(acc);
+      if(completed.length > lastCompleted) lastCompleted = completed.length;
+      // Tam dizi geldiyse birebir (sıralı) doldur — satır kayması imkânsız.
       const full = tryParseJsonArray(acc);
       if(fillFromArray(full)){
-        if(lastCompleted !== cues.length){
-          lastCompleted = cues.length;
-          aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
-          updateBtn();
-          if(lastBlob) URL.revokeObjectURL(lastBlob);
-          lastBlob = buildBlob();
-          trackEl.src = lastBlob;
-          if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
-        }
+        lastCompleted = cues.length;
+        aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
+        updateBtn();
+        if(lastBlob) URL.revokeObjectURL(lastBlob);
+        lastBlob = buildBlob();
+        trackEl.src = lastBlob;
+        if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
         return;
       }
-      // 2) Tam dizi yoksa kısmi JSON'dan tamamlanan satırları işle.
-      const completed = partialJsonArray(acc);
-      if(completed.length <= lastCompleted) return;
-      lastCompleted = completed.length;
-      completed.forEach((t, j)=>{
-        if(t && t.trim() && j < cues.length) outLines[j] = t.trim();
-      });
       aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
       updateBtn();
-      if(lastBlob) URL.revokeObjectURL(lastBlob);
-      lastBlob = buildBlob();
-      trackEl.src = lastBlob;
-      if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
     };
 
     await streamGemini(apiKey, systemPrompt, numbered, effectiveLevel, (text)=>{
@@ -6209,7 +6299,7 @@ async function translateSubtitlesToAz(){
       // Model düşünüyor — içerik daha akmaya başlamadı, kullanıcıya göster.
       aiThinkingPhase = true;
       updateBtn();
-    });
+    }, aiModel);
 
     // Stream bitti — son tamamlanan kısmı işle.
     preview();
@@ -6222,7 +6312,7 @@ async function translateSubtitlesToAz(){
     let repairAll = false;
     if(needFullRetry){
       try{
-        const rep = await translateChunkToAz(apiKey, original, systemPrompt, effectiveLevel);
+        const rep = await translateChunkToAz(apiKey, original, systemPrompt, effectiveLevel, aiModel);
         if(Array.isArray(rep) && rep.length === cues.length){
           rep.forEach((line, i)=>{
             if(line && line.trim()) outLines[i] = line.trim();
@@ -6242,7 +6332,7 @@ async function translateSubtitlesToAz(){
       const missingLines = missingIdx.map(idx => original[idx]);
       let rep = null;
       for(let attempt = 0; attempt < 1 && !rep; attempt++){
-        try{ rep = await translateChunkToAz(apiKey, missingLines, systemPrompt, effectiveLevel); }
+        try{ rep = await translateChunkToAz(apiKey, missingLines, systemPrompt, effectiveLevel, aiModel); }
         catch(err){ console.error('[ai-sub] repair attempt ' + attempt + ':', err && err.message ? err.message : err); }
       }
       if(Array.isArray(rep)){
@@ -6305,9 +6395,26 @@ async function translateSubtitlesToAz(){
   }
 }
 
-// Gemini doğrudan API çağrısı (worker proxy yok) — model Flash-Lite.
+// Gemini doğrudan API çağrısı (worker proxy yok) — model dinamik (admin/global).
+// Varsayılan model, admin panelden site_config "ai_model" ile HERKES için değiştirilebilir.
 const GEMINI_MODEL = 'gemini-3.5-flash-lite';
-const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL;
+function geminiBase(model){
+  const m = (model && model.trim()) || GEMINI_MODEL;
+  return 'https://generativelanguage.googleapis.com/v1beta/models/' + m;
+}
+// Model + prompt değişikliğini cache anahtarına yansıtan kısa, güvenli hash.
+// Admin model/prompt değiştirince hash değişir → eski cache kullanılmaz.
+function subCacheHash(model, prompt){
+  const s = (model || '') + '\u0001' + (prompt || '');
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for(let i=0;i<s.length;i++){
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ c, 0x85ebca6b) >>> 0;
+  }
+  return (h1.toString(16) + h2.toString(16)).slice(0, 10);
+}
 
 // Prompt alanı boş bırakılırsa kullanılan varsayılan çeviri promptu.
 // Admin panelden site_config'e yazılan "sub_prompt" değeri bunu ezer.
@@ -6362,10 +6469,10 @@ Return ONLY a plain JSON array starting with "[" like ["translation 1","translat
 // geldikçe onText(text) çağrılır. Thinking variantı ve özel prompt desteği var.
 // apiKey verilirse doğrudan Gemini'ye gidilir (kullanıcının kendi key'i);
 // boşsa Supabase edge function proxy'si kullanılır (7+ paylaşımlı key, gizli).
-async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onText, onThinking){
+async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onText, onThinking, model){
   const useProxy = !(apiKey && apiKey.trim());
   const body = useProxy
-    ? { systemPrompt: systemPrompt, userText: userText, thinkingLevel: String(thinkingLevel || 'minimal').toLowerCase() }
+    ? { systemPrompt: systemPrompt, userText: userText, thinkingLevel: String(thinkingLevel || 'minimal').toLowerCase(), model: (model && model.trim()) || undefined }
     : {
         contents: [{ role: 'user', parts: [{ text: userText }] }],
         systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -6374,7 +6481,7 @@ async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onTex
         }
       };
   const resp = await fetch(
-    useProxy ? SUPABASE_URL + '/functions/v1/gemini-proxy' : GEMINI_BASE + ':streamGenerateContent?alt=sse&key=' + encodeURIComponent(apiKey),
+    useProxy ? SUPABASE_URL + '/functions/v1/gemini-proxy' : geminiBase(model) + ':streamGenerateContent?alt=sse&key=' + encodeURIComponent(apiKey),
     {
       method: 'POST',
       headers: useProxy ? { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SUPABASE_KEY } : { 'Content-Type': 'application/json' },
@@ -6473,11 +6580,11 @@ function partialJsonArray(text){
 // Repair: streaming'de kaçan satırlar için non-streaming Gemini çağrısı.
 // Yanıt JSON-array olarak istenir; parse tam dizi → {"translations":[...]}
 // → kısmi dizi sırasıyla düşer. apiKey boşsa edge function proxy'si kullanılır.
-async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel){
+async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel, model){
   const numbered = lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
   const useProxy = !(apiKey && apiKey.trim());
   const body = useProxy
-    ? { systemPrompt: systemPrompt, userText: numbered, thinkingLevel: String(thinkingLevel || 'minimal').toLowerCase(), repair: true }
+    ? { systemPrompt: systemPrompt, userText: numbered, thinkingLevel: String(thinkingLevel || 'minimal').toLowerCase(), repair: true, model: (model && model.trim()) || undefined }
     : {
         contents: [{ role: 'user', parts: [{ text: numbered }] }],
         systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -6488,7 +6595,7 @@ async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel){
         }
       };
   const resp = await fetch(
-    useProxy ? SUPABASE_URL + '/functions/v1/gemini-proxy' : GEMINI_BASE + ':generateContent?key=' + encodeURIComponent(apiKey),
+    useProxy ? SUPABASE_URL + '/functions/v1/gemini-proxy' : geminiBase(model) + ':generateContent?key=' + encodeURIComponent(apiKey),
     {
       method: 'POST',
       headers: useProxy ? { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SUPABASE_KEY } : { 'Content-Type': 'application/json' },

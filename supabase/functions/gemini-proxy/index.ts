@@ -6,15 +6,14 @@
 // Round-robin + per-key hız sınırı + 429/cooldown izolasyonu ile key'ler
 // banlanmadan, mümkün olan en hızlı şekilde SSE stream'i passthrough eder.
 //
-// İstek gövdesi:  { systemPrompt?, userText, thinkingLevel? }
+// İstek gövdesi:  { systemPrompt?, userText, thinkingLevel?, model?, repair? }
 // Yanıt:         Gemini'den gelen SSE stream'i AYNEN geri yazılır.
 //                Hata: { status, error:{message} } JSON.
+// model isteğe bağlıdır; verilmezse MODEL varsayılanı kullanılır. Admin panelden
+// site_config "ai_model" ile HERKES için değiştirilebilir.
 // ============================================================================
 
 const MODEL = 'gemini-3.5-flash-lite';
-const BASE = 'https://generativelanguage.googleapis.com/v1beta/models/' + MODEL;
-const STREAM_URL = BASE + ':streamGenerateContent?alt=sse&key=';
-const GEN_URL = BASE + ':generateContent?key=';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -98,6 +97,11 @@ Deno.serve(async (req) => {
   // Paylaşımlı havuzdaki tüm key'ler HIGH variant ile çalışır (kullanıcı kararı).
   const thinkingLevel = 'HIGH';
   const isRepair = body.repair === true; // non-streaming onarım isteği
+  // Model override: yalnızca güvenli model adları kabul edilir (path injection yok).
+  const reqModel = typeof body.model === 'string' && /^[a-zA-Z0-9._-]+$/.test(body.model.trim())
+    ? body.model.trim()
+    : MODEL;
+  const reqBase = 'https://generativelanguage.googleapis.com/v1beta/models/' + reqModel;
 
   const k = keys();
   if (!k.length) {
@@ -139,7 +143,7 @@ Deno.serve(async (req) => {
 
     let resp: Response;
     try {
-      const url = isRepair ? GEN_URL : STREAM_URL;
+      const url = isRepair ? reqBase + ':generateContent?key=' : reqBase + ':streamGenerateContent?alt=sse&key=';
       resp = await fetch(url + encodeURIComponent(apiKey), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
