@@ -973,8 +973,8 @@
     <div class="settings-card">
       <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:10px;">
         <div>
-          <div class="settings-row-label">Gemini API açarı</div>
-          <div class="settings-row-sub">aistudio.google.com/apikey saytından Gemini 3.5 Flash-Lite API açarını yapışdırın (yalnız cihazda saxlanılır)</div>
+          <div class="settings-row-label">Gemini API açarı (istəyə bağlı)</div>
+          <div class="settings-row-sub">Boş buraxsanız saytın paylaşımlı 7+ key'i (HIGH variant) istifadə olunur. Özəl açar girsəniz o istifadə edilir (yalnız cihazda saxlanılır)</div>
         </div>
         <input type="password" id="aiApiKeyInput" placeholder="Gemini API açarı..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;">
         <div>
@@ -5943,7 +5943,8 @@ let aiSubProgress = 0;
 // geçer. Oynatma pozisyonu bozulmaz (video akışına dokunulmaz). Çeviri doğrudan
 // tarayıcıdan Gemini 3.5 Flash-Lite'a SSE streaming ile gider — tek istekte
 // tüm satırlar çevrilir ama tamamlanan kısım anında ekranda görünür (preview).
-// Key kullanıcı tarayıcısında saklanır.
+// Key kullanıcı tarayıcısında saklanır; boşsa Supabase edge function proxy'si
+// kullanılır (7+ paylaşımlı key). Çevrilen VTT Supabase Storage'a cache'lenir.
 async function translateSubtitlesToAz(){
   if(aiSubTranslating) return;
   const vid = document.getElementById('mainVideoEl');
@@ -5958,9 +5959,37 @@ async function translateSubtitlesToAz(){
     return;
   }
   const apiKey = (state.aiKey || '').trim();
-  if(!apiKey){
-    showToast(state.lang==='en' ? 'Add your Gemini API key in Settings' : (state.lang==='tr' ? 'Ayarlardan Gemini API anahtarını ekle' : 'Ayarlardan Gemini API açarını əlavə edin'));
-    return;
+
+  // Cache anahtarı: az/{animeId}/{ep}.vtt — aynı bölüm daha önce çevrildiyse
+  // Gemini'ye hiç gitmeden cache'ten yükle (anında, maliyetsiz).
+  const cachePath = (currentDetail && currentDetail.id && currentEpisodeNum != null)
+    ? ('az/' + currentDetail.id + '/' + currentEpisodeNum + '.vtt')
+    : null;
+  if(cachePath){
+    try{
+      const cachedResp = await fetch(SUPABASE_URL + '/storage/v1/object/public/az-subs/' + cachePath);
+      if(cachedResp.ok){
+        const cachedVtt = await cachedResp.text();
+        const cachedCues = parseVttCues(cachedVtt);
+        if(cachedCues && cachedCues.length){
+          currentSubtitleTracks = currentSubtitleTracks.filter(t => t.label !== 'Azərbaycanca (AI)');
+          if(vid && vid.querySelectorAll){
+            vid.querySelectorAll('track').forEach(t => {
+              if(t.label === 'Azərbaycanca (AI)' && t.parentNode) t.parentNode.removeChild(t);
+            });
+          }
+          const ci = currentSubtitleTracks.length;
+          currentSubtitleTracks.push({ file: URL.createObjectURL(new Blob([cachedVtt], { type: 'text/vtt' })), label: 'Azərbaycanca (AI)' });
+          const ct = document.createElement('track');
+          ct.kind = 'subtitles'; ct.label = 'Azərbaycanca (AI)'; ct.srclang = 'az';
+          ct.src = currentSubtitleTracks[ci].file;
+          vid.appendChild(ct);
+          switchSubtitle(ci);
+          showToast(state.lang==='en' ? 'Loaded AZ subtitles (cached) ✓' : (state.lang==='tr' ? 'AZ altyazı cacheten yüklendi ✓' : 'AZ altyazı keşdən yükləndi ✓'));
+          return;
+        }
+      }
+    }catch(e){ /* cache miss — çevirmeye devam */ }
   }
 
   // Varsa önceki çeviri track'ini temizle (aynı oturumda yeniden basıldıysa).
@@ -5977,7 +6006,7 @@ async function translateSubtitlesToAz(){
   let aiThinkingPhase = false;
   const aiStartAt = Date.now();
   let aiTicker = null;
-  const aiLevelTag = String(state.aiThinking || 'minimal').toUpperCase();
+  const aiLevelTag = (apiKey ? (['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal') : 'high').toUpperCase();
   const updateBtn = ()=>{
     if(!btn) return;
     const secs = Math.max(1, Math.round((Date.now() - aiStartAt) / 1000));
@@ -6037,8 +6066,10 @@ async function translateSubtitlesToAz(){
     // Tek istek: TÜM satırlar tek Gemini çağrısında gider; SSE streaming ile
     // kısmi JSON geldikçe tamamlanan satırlar hemen blob'a işlenir (preview).
     const systemPrompt = (state.aiPrompt && state.aiPrompt.trim()) ? state.aiPrompt.trim() : DEFAULT_SUB_PROMPT;
-    const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal';
-    const numbered = original.map((l,i)=> (i+1) + '. ' + l).join('\n');
+  const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal';
+  // Paylaşımlı havuz (proxy) HIGH kullanır; kendi key'i olan kullanıcı selector'ü.
+  const effectiveLevel = apiKey ? thinkingLevel : 'high';
+  const numbered = original.map((l,i)=> (i+1) + '. ' + l).join('\n');
 
     let acc = '';
     let lastBlob = null;
@@ -6059,7 +6090,7 @@ async function translateSubtitlesToAz(){
       if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
     };
 
-    await streamGemini(apiKey, systemPrompt, numbered, thinkingLevel, (text)=>{
+    await streamGemini(apiKey, systemPrompt, numbered, effectiveLevel, (text)=>{
       aiThinkingPhase = false;
       acc = text;
       preview();
@@ -6082,7 +6113,7 @@ async function translateSubtitlesToAz(){
       const missingLines = missingIdx.map(idx => original[idx]);
       let rep = null;
       for(let attempt = 0; attempt < 3 && !rep; attempt++){
-        try{ rep = await translateChunkToAz(apiKey, missingLines, systemPrompt, thinkingLevel); }
+        try{ rep = await translateChunkToAz(apiKey, missingLines, systemPrompt, effectiveLevel); }
         catch(err){ console.error('[ai-sub] repair attempt ' + attempt + ':', err && err.message ? err.message : err); if(attempt < 2) await new Promise(r => setTimeout(r, 400)); }
       }
       if(Array.isArray(rep)){
@@ -6101,6 +6132,29 @@ async function translateSubtitlesToAz(){
     switchSubtitle(newIndex);
     aiSubProgress = 100;
     updateBtn();
+
+    // Çevrilen VTT'yi Supabase Storage'a cache'le — aynı bölüm bir daha
+    // istenirse Gemini'ye gidilmez. Upsert ile üzerine yazılır.
+    if(cachePath){
+      try{
+        const vttLines = ['WEBVTT', ''];
+        cues.forEach((cue, i)=>{
+          vttLines.push(cue.start + ' --> ' + cue.end + (cue.settings ? ' ' + cue.settings : ''));
+          vttLines.push((outLines[i] && outLines[i].trim()) ? outLines[i] : original[i]);
+          vttLines.push('');
+        });
+        await fetch(SUPABASE_URL + '/storage/v1/object/az-subs/' + cachePath, {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + SUPABASE_KEY,
+            'Content-Type': 'text/vtt',
+            'x-upsert': 'true'
+          },
+          body: vttLines.join('\n')
+        });
+      }catch(e){ console.error('[ai-sub] cache write failed', e); }
+    }
+
     showToast(state.lang==='en' ? 'Subtitles translated to AZ ✓' : (state.lang==='tr' ? 'Altyazı AZ çevrildi ✓' : 'Altyazı AZ-a çevrildi ✓'));
   }catch(e){
     console.error('[ai-sub]', e);
@@ -6131,19 +6185,27 @@ const DEFAULT_SUB_PROMPT = 'You are a professional Azerbaijani subtitle translat
 
 // Gemini SSE streaming: tek istekte tüm satırlar gider, kısmi JSON parçaları
 // geldikçe onText(text) çağrılır. Thinking variantı ve özel prompt desteği var.
+// apiKey verilirse doğrudan Gemini'ye gidilir (kullanıcının kendi key'i);
+// boşsa Supabase edge function proxy'si kullanılır (7+ paylaşımlı key, gizli).
 async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onText, onThinking){
-  const body = {
-    contents: [{ role: 'user', parts: [{ text: userText }] }],
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-    generationConfig: {
-      thinkingConfig: { thinkingLevel: String(thinkingLevel || 'minimal').toUpperCase() }
+  const useProxy = !(apiKey && apiKey.trim());
+  const body = useProxy
+    ? { systemPrompt: systemPrompt, userText: userText, thinkingLevel: String(thinkingLevel || 'minimal').toLowerCase() }
+    : {
+        contents: [{ role: 'user', parts: [{ text: userText }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: {
+          thinkingConfig: { thinkingLevel: String(thinkingLevel || 'minimal').toUpperCase() }
+        }
+      };
+  const resp = await fetch(
+    useProxy ? SUPABASE_URL + '/functions/v1/gemini-proxy' : GEMINI_BASE + ':streamGenerateContent?alt=sse&key=' + encodeURIComponent(apiKey),
+    {
+      method: 'POST',
+      headers: useProxy ? { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SUPABASE_KEY } : { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     }
-  };
-  const resp = await fetch(GEMINI_BASE + ':streamGenerateContent?alt=sse&key=' + encodeURIComponent(apiKey), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
+  );
   if(!resp.ok){
     let msg = 'Gemini HTTP ' + resp.status;
     try{
@@ -6235,23 +6297,29 @@ function partialJsonArray(text){
 
 // Repair: streaming'de kaçan satırlar için non-streaming Gemini çağrısı.
 // Yanıt JSON-array olarak istenir; parse tam dizi → {"translations":[...]}
-// → kısmi dizi sırasıyla düşer.
+// → kısmi dizi sırasıyla düşer. apiKey boşsa edge function proxy'si kullanılır.
 async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel){
   const numbered = lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
-  const body = {
-    contents: [{ role: 'user', parts: [{ text: numbered }] }],
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-    generationConfig: {
-      responseMimeType: 'application/json',
-      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } },
-      thinkingConfig: { thinkingLevel: String(thinkingLevel || 'minimal').toUpperCase() }
+  const useProxy = !(apiKey && apiKey.trim());
+  const body = useProxy
+    ? { systemPrompt: systemPrompt, userText: numbered, thinkingLevel: String(thinkingLevel || 'minimal').toLowerCase(), repair: true }
+    : {
+        contents: [{ role: 'user', parts: [{ text: numbered }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: { type: 'ARRAY', items: { type: 'STRING' } },
+          thinkingConfig: { thinkingLevel: String(thinkingLevel || 'minimal').toUpperCase() }
+        }
+      };
+  const resp = await fetch(
+    useProxy ? SUPABASE_URL + '/functions/v1/gemini-proxy' : GEMINI_BASE + ':generateContent?key=' + encodeURIComponent(apiKey),
+    {
+      method: 'POST',
+      headers: useProxy ? { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SUPABASE_KEY } : { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     }
-  };
-  const resp = await fetch(GEMINI_BASE + ':generateContent?key=' + encodeURIComponent(apiKey), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
+  );
   const json = await resp.json().catch(()=>null);
   if(!resp.ok || !json){
     throw new Error(json && json.error && json.error.message ? json.error.message : 'Gemini HTTP ' + resp.status);

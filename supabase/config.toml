@@ -1,0 +1,5 @@
+project_id = "yhyukjmotvbbrjmvcrof"
+
+[functions.gemini-proxy]
+verify_jwt = false
+timeout_sec = 300

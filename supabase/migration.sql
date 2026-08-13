@@ -178,3 +178,29 @@ begin
     execute format('create trigger %I before update on %I.%I for each row execute function public.touch_updated_at();', 'set_updated_at', 'public', t);
   end loop;
 end $$;
+
+
+-- ============================================================================
+-- AZ Altyazı cache'i — Supabase Storage bucket "az-subs"
+-- (gemini-proxy edge function + tarayıcıdan anon yazma/okuma)
+-- ============================================================================
+
+insert into storage.buckets (id, name, public)
+values ('az-subs', 'az-subs', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists az_subs_anon_insert on storage.objects;
+create policy az_subs_anon_insert on storage.objects
+  for insert to anon with check (bucket_id = 'az-subs');
+
+drop policy if exists az_subs_anon_update on storage.objects;
+create policy az_subs_anon_update on storage.objects
+  for update to anon using (bucket_id = 'az-subs');
+
+drop policy if exists az_subs_anon_delete on storage.objects;
+create policy az_subs_anon_delete on storage.objects
+  for delete to anon using (bucket_id = 'az-subs');
+
+drop policy if exists az_subs_anon_select on storage.objects;
+create policy az_subs_anon_select on storage.objects
+  for select to anon using (bucket_id = 'az-subs');
