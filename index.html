@@ -6105,9 +6105,9 @@ async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onTex
     systemInstruction: { parts: [{ text: systemPrompt }] },
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } }
-    },
-    thinkingConfig: { thinkingLevel: String(thinkingLevel || 'low').toUpperCase() }
+      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } },
+      thinkingConfig: { thinkingLevel: String(thinkingLevel || 'low').toUpperCase() }
+    }
   };
   const resp = await fetch(GEMINI_BASE + ':streamGenerateContent?alt=sse&key=' + encodeURIComponent(apiKey), {
     method: 'POST',
@@ -6204,9 +6204,9 @@ async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel){
     systemInstruction: { parts: [{ text: systemPrompt }] },
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } }
-    },
-    thinkingConfig: { thinkingLevel: String(thinkingLevel || 'low').toUpperCase() }
+      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } },
+      thinkingConfig: { thinkingLevel: String(thinkingLevel || 'low').toUpperCase() }
+    }
   };
   const resp = await fetch(GEMINI_BASE + ':generateContent?key=' + encodeURIComponent(apiKey), {
     method: 'POST',
