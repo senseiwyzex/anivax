@@ -259,7 +259,9 @@
 
   /* AI subtitle translate button */
   .ai-sub-btn{ border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-  .ai-sub-busy{ opacity:.65; pointer-events:none; }
+  .ai-sub-busy{ opacity:.85; pointer-events:none; cursor:wait; }
+  .ai-sub-busy .ai-spin{ display:inline-block; animation: ai-spin .9s linear infinite; }
+  @keyframes ai-spin{ to{ transform: rotate(360deg); } }
 
   .theme-swatch{ width:14px; height:14px; border-radius:50%; border:1px solid var(--line); }
 
@@ -5972,9 +5974,23 @@ async function translateSubtitlesToAz(){
   aiSubTranslating = true;
   aiSubProgress = 0;
   const btn = document.getElementById('aiSubBtn');
+  let aiThinkingPhase = false;
+  const aiStartAt = Date.now();
+  let aiTicker = null;
   const updateBtn = ()=>{
-    if(btn) btn.innerHTML = 'Çevriliyor ' + aiSubProgress + '%...';
+    if(!btn) return;
+    const secs = Math.max(1, Math.round((Date.now() - aiStartAt) / 1000));
+    if(aiThinkingPhase){
+      btn.innerHTML = '<span class="ai-spin">⟳</span> Düşünür… ' + secs + 'sn';
+    }else{
+      btn.innerHTML = 'Çevriliyor ' + aiSubProgress + '%...';
+    }
   };
+  if(btn){
+    btn.classList.add('ai-sub-busy');
+    btn.disabled = true;
+  }
+  aiTicker = setInterval(updateBtn, 1000);
 
   try{
     // VTT'yi indir (addTracks aynı dosyayı tarayıcıdan çekiyor, CORS sorunsuz).
@@ -6043,8 +6059,13 @@ async function translateSubtitlesToAz(){
     };
 
     await streamGemini(apiKey, systemPrompt, numbered, thinkingLevel, (text)=>{
+      aiThinkingPhase = false;
       acc = text;
       preview();
+    }, ()=>{
+      // Model düşünüyor — içerik daha akmaya başlamadı, kullanıcıya göster.
+      aiThinkingPhase = true;
+      updateBtn();
     });
 
     // Stream bitti — son tamamlanan kısmı işle.
@@ -6088,6 +6109,12 @@ async function translateSubtitlesToAz(){
   }finally{
     aiSubTranslating = false;
     aiSubProgress = 0;
+    if(aiTicker){ clearInterval(aiTicker); aiTicker = null; }
+    const btnNow = document.getElementById('aiSubBtn');
+    if(btnNow){
+      btnNow.classList.remove('ai-sub-busy');
+      btnNow.disabled = false;
+    }
     // Butonu yeniden düzenle (AI track artık listede olduğundan buton gizlenecek)
     const srcNow = currentDetail && currentDetail.episodeSources ? currentDetail.episodeSources[currentEpisodeNum] : null;
     buildPlayerSettingsPanel(srcNow);
@@ -6103,7 +6130,7 @@ const DEFAULT_SUB_PROMPT = 'You are a professional Azerbaijani subtitle translat
 
 // Gemini SSE streaming: tek istekte tüm satırlar gider, kısmi JSON parçaları
 // geldikçe onText(text) çağrılır. Thinking variantı ve özel prompt desteği var.
-async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onText){
+async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onText, onThinking){
   const body = {
     contents: [{ role: 'user', parts: [{ text: userText }] }],
     systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -6143,9 +6170,12 @@ async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onTex
         const parts = j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
         if(Array.isArray(parts)){
           let text = '';
+          let sawThought = false;
           for(const p of parts){
-            if(p && !p.thought && p.text) text += p.text;
+            if(p && p.thought){ sawThought = true; continue; }
+            if(p && p.text) text += p.text;
           }
+          if(sawThought && onThinking && !text) onThinking();
           if(text){
             // Gemini SSE'de text kümülatif gelir; yine de delta gelirse topla.
             acc = acc && text.startsWith(acc) ? text : acc + text;
