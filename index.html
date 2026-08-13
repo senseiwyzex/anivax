@@ -5720,6 +5720,11 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
     // tracks above matter. Keep default track visible to match prior behavior.
     addTracks().then(()=>{
       try{ for(let i=0;i<vid.textTracks.length;i++){ vid.textTracks[i].mode = (i===0) ? 'showing' : 'hidden'; } }catch(e){}
+      // Cache'ten AZ track eklendiyse panel yeniden kurulmalı (buildPlayerSettingsPanel
+      // addTracks'ten ÖNCE çağrıldığı için AZ pill'i listede olmuyordu).
+      if(currentSubtitleTracks.some(t => t.label === 'Azərbaycanca (AI)')){
+        buildPlayerSettingsPanel(null);
+      }
     });
     buildPlayerSettingsPanel(null);
   }catch(e){
@@ -6128,13 +6133,17 @@ async function translateSubtitlesToAz(){
     switchSubtitle(newIndex);
 
     const original = cues.map(c => c.text);
+
+    // ASS `\N` satır-kırma işareti WebVTT'de gerçek yeni satır olur; yoksa
+    // tarayıcı satırı kırmaz ve kelimeler birleşik görünür.
+    const toVttText = (s)=> String(s).replace(/\\N/g, '\n');
     const outLines = new Array(cues.length).fill(null);
 
     const buildBlob = ()=>{
       const vttLines = ['WEBVTT', ''];
       cues.forEach((cue, i)=>{
         vttLines.push(cue.start + ' --> ' + cue.end + (cue.settings ? ' ' + cue.settings : ''));
-        vttLines.push((outLines[i] && outLines[i].trim()) ? outLines[i] : original[i]);
+        vttLines.push((outLines[i] && outLines[i].trim()) ? toVttText(outLines[i]) : original[i]);
         vttLines.push('');
       });
       return URL.createObjectURL(new Blob([vttLines.join('\n')], { type: 'text/vtt' }));
@@ -6154,13 +6163,35 @@ async function translateSubtitlesToAz(){
     let acc = '';
     let lastBlob = null;
     let lastCompleted = 0;
+    // Tam JSON-array geldiğinde birebir (sıralı) doldur — satır kayması imkânsız.
+    const fillFromArray = (arr)=>{
+      if(!Array.isArray(arr) || arr.length !== cues.length) return false;
+      for(let i=0;i<arr.length;i++){
+        if(typeof arr[i] === 'string') outLines[i] = arr[i].trim();
+      }
+      return true;
+    };
     const preview = ()=>{
+      // 1) Tam dizi parse et: eleman sayısı cue sayısıyla eşleşiyorsa birebir ata.
+      const full = tryParseJsonArray(acc);
+      if(fillFromArray(full)){
+        if(lastCompleted !== cues.length){
+          lastCompleted = cues.length;
+          aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
+          updateBtn();
+          if(lastBlob) URL.revokeObjectURL(lastBlob);
+          lastBlob = buildBlob();
+          trackEl.src = lastBlob;
+          if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
+        }
+        return;
+      }
+      // 2) Tam dizi yoksa kısmi JSON'dan tamamlanan satırları işle.
       const completed = partialJsonArray(acc);
-      // Yeni tamamlanan satır var mı? Yoksa blob'u yeniden kurmaya gerek yok.
       if(completed.length <= lastCompleted) return;
       lastCompleted = completed.length;
       completed.forEach((t, j)=>{
-        if(t && t.trim()) outLines[j] = t.trim();
+        if(t && t.trim() && j < cues.length) outLines[j] = t.trim();
       });
       aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
       updateBtn();
@@ -6183,13 +6214,31 @@ async function translateSubtitlesToAz(){
     // Stream bitti — son tamamlanan kısmı işle.
     preview();
 
+    // Satır sayısı doğrulaması: stream'den gelen TAM array'in uzunluğu cue
+    // sayısına eşit değilse (model bir satırı birleştirdi/atlarsa) tümünü
+    // non-streaming repair ile YENİDEN çevir — kayma olsa bile hizalanır.
+    const fullArr = tryParseJsonArray(acc);
+    const needFullRetry = !(Array.isArray(fullArr) && fullArr.length === cues.length);
+    let repairAll = false;
+    if(needFullRetry){
+      try{
+        const rep = await translateChunkToAz(apiKey, original, systemPrompt, effectiveLevel);
+        if(Array.isArray(rep) && rep.length === cues.length){
+          rep.forEach((line, i)=>{
+            if(line && line.trim()) outLines[i] = line.trim();
+          });
+          repairAll = true;
+        }
+      }catch(err){ console.error('[ai-sub] full repair failed:', err); }
+    }
+
     // Onarım: streaming'de eksik kalan (çevrilemeyen) satırları küçük,
     // non-streaming bir istekle tamamla — İngilizce satır kalmasın.
     const missingIdx = [];
     for(let i=0;i<cues.length;i++){
       if(!(outLines[i] && outLines[i].trim())) missingIdx.push(i);
     }
-    if(missingIdx.length){
+    if(missingIdx.length && !repairAll){
       const missingLines = missingIdx.map(idx => original[idx]);
       let rep = null;
       for(let attempt = 0; attempt < 1 && !rep; attempt++){
@@ -6220,7 +6269,7 @@ async function translateSubtitlesToAz(){
         const vttLines = ['WEBVTT', ''];
         cues.forEach((cue, i)=>{
           vttLines.push(cue.start + ' --> ' + cue.end + (cue.settings ? ' ' + cue.settings : ''));
-          vttLines.push((outLines[i] && outLines[i].trim()) ? outLines[i] : original[i]);
+          vttLines.push((outLines[i] && outLines[i].trim()) ? toVttText(outLines[i]) : original[i]);
           vttLines.push('');
         });
         await fetch(SUPABASE_URL + '/storage/v1/object/az-subs/' + cachePath, {
