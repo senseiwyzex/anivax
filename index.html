@@ -784,6 +784,19 @@
   <!-- TAB: System settings -->
   <div id="adminTab-system" class="admin-tab-panel hidden">
     <div class="settings-group" style="margin-top:16px;">
+      <div class="settings-label">Global AI Altyazı Promptu</div>
+      <div class="settings-card">
+        <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:10px;">
+          <div class="settings-row-sub">Bu prompt site_config tablosundan HERKES için kullanılır. Kullanıcı kendi prompt'unu girerse onunki geçerli olur. Boş bırakılırsa varsayılan prompt kullanılır.</div>
+          <textarea id="adminSubPromptInput" rows="8" placeholder="Global çeviri promptu..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:12.5px;outline:none;resize:vertical;font-family:inherit;"></textarea>
+          <div style="display:flex; gap:8px;">
+            <button class="btn-primary" style="flex:1;" onclick="saveAdminSubPrompt()">Promptu Kaydet</button>
+            <button class="btn-ghost" onclick="resetAdminSubPrompt()">Varsayılan</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="settings-group">
       <div class="settings-label" data-i18n="admin.system.access">Giriş</div>
       <div class="settings-card">
         <div class="settings-row">
@@ -1127,6 +1140,27 @@ async function loadGlobalSources(){
 }
 function sourceEnabled(name){
   return globalSources[name] !== false;
+}
+
+// ================= GLOBAL AI ALTYAZI PROMPTU (site_config → Supabase) =================
+// Admin "Sistem" sekmesinden değiştirilebilir; değişince HERKES için yeni prompt
+// kullanılır. Boşsa/yoksa DEFAULT_SUB_PROMPT'e düşer. Tek satırlık read, çeviri
+// başına ek istek yok — sayfa açılışında bir kez çekilir (sources ile birlikte).
+let globalSubPrompt = '';
+async function loadGlobalSubPrompt(){
+  if(!sbReady()) return;
+  try{
+    const { data, error } = await withTimeout(sb.from('site_config').select('data').eq('key','sub_prompt').maybeSingle(), 4000);
+    if(!error && data && data.data && typeof data.data.prompt === 'string' && data.data.prompt.trim()){
+      globalSubPrompt = data.data.prompt;
+    }
+  }catch(e){ console.warn('loadGlobalSubPrompt:', e); }
+}
+async function saveGlobalSubPrompt(){
+  if(!sbReady()) return;
+  try{
+    await withTimeout(sb.from('site_config').upsert({ key:'sub_prompt', data:{ prompt: globalSubPrompt }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
+  }catch(e){ console.warn('saveGlobalSubPrompt:', e); }
 }
 // Sıralama korunur: Otakuhg (en hızlı) → Bibiemb → Otakuvid. Admin kapatılan
 // aileler burada elenir, böylece hiç istenmeyen sunucuya istek gitmez.
@@ -1633,6 +1667,8 @@ async function loadState(){
 
   // Admin "Kaynaklar" panelindeki global kaynak anahtarlarını yükle (herkes için).
   try{ await loadGlobalSources(); }catch(e){ console.error('loadState: loadGlobalSources failed', e); }
+  // Admin "Sistem" panelindeki global AI altyazı promptunu yükle (herkes için).
+  try{ await loadGlobalSubPrompt(); }catch(e){ console.error('loadState: loadGlobalSubPrompt failed', e); }
 
   // 1) Anında render: yerel önbellekten kütüphane gelirse home hemen çizilir,
   //    ağ yanıtı beklenmez (eski davranış: 6 seri fetch bitene kadar boş ekran).
@@ -3238,10 +3274,30 @@ function renderAdminDashboard(){
   }).join('');
 }
 
-function updateSystemTab(){
+ function updateSystemTab(){
   document.getElementById('adminLibCount').textContent = state.library.length + ' ' + (state.lang==='en'?'anime':'anime');
   refreshDirectOtakuBtn();
-}
+  const prompEl = document.getElementById('adminSubPromptInput');
+  if(prompEl) prompEl.value = globalSubPrompt;
+ }
+
+ function saveAdminSubPrompt(){
+  if(!requireAdmin()) return;
+  const el = document.getElementById('adminSubPromptInput');
+  if(!el) return;
+  globalSubPrompt = el.value.trim();
+  saveGlobalSubPrompt();
+  showToast(state.lang==='en' ? 'Global AI prompt saved for everyone' : (state.lang==='tr' ? 'Global AI promptu herkes için kaydedildi' : 'Qlobal AI promptu hamı üçün saxlanıldı'));
+ }
+
+ function resetAdminSubPrompt(){
+  if(!requireAdmin()) return;
+  globalSubPrompt = '';
+  saveGlobalSubPrompt();
+  const el = document.getElementById('adminSubPromptInput');
+  if(el) el.value = '';
+  showToast(state.lang==='en' ? 'Global AI prompt reset to default' : (state.lang==='tr' ? 'Global AI promptu varsayılana döndü' : 'Qlobal AI promptu standarta qayıtdı'));
+ }
 
 function refreshDirectOtakuBtn(){
   const btn = document.getElementById('directOtakuBtn');
@@ -6065,7 +6121,10 @@ async function translateSubtitlesToAz(){
 
     // Tek istek: TÜM satırlar tek Gemini çağrısında gider; SSE streaming ile
     // kısmi JSON geldikçe tamamlanan satırlar hemen blob'a işlenir (preview).
-    const systemPrompt = (state.aiPrompt && state.aiPrompt.trim()) ? state.aiPrompt.trim() : DEFAULT_SUB_PROMPT;
+    // Prompt önceliği: kullanıcının kendi prompt'u → admin'in global prompt'u → varsayılan.
+    const systemPrompt = (state.aiPrompt && state.aiPrompt.trim())
+      ? state.aiPrompt.trim()
+      : (globalSubPrompt || DEFAULT_SUB_PROMPT);
   const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal';
   // Paylaşımlı havuz (proxy) HIGH kullanır; kendi key'i olan kullanıcı selector'ü.
   const effectiveLevel = apiKey ? thinkingLevel : 'high';
@@ -6112,9 +6171,9 @@ async function translateSubtitlesToAz(){
     if(missingIdx.length){
       const missingLines = missingIdx.map(idx => original[idx]);
       let rep = null;
-      for(let attempt = 0; attempt < 3 && !rep; attempt++){
+      for(let attempt = 0; attempt < 1 && !rep; attempt++){
         try{ rep = await translateChunkToAz(apiKey, missingLines, systemPrompt, effectiveLevel); }
-        catch(err){ console.error('[ai-sub] repair attempt ' + attempt + ':', err && err.message ? err.message : err); if(attempt < 2) await new Promise(r => setTimeout(r, 400)); }
+        catch(err){ console.error('[ai-sub] repair attempt ' + attempt + ':', err && err.message ? err.message : err); }
       }
       if(Array.isArray(rep)){
         rep.forEach((line, j)=>{
@@ -6181,7 +6240,53 @@ const GEMINI_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL;
 
 // Prompt alanı boş bırakılırsa kullanılan varsayılan çeviri promptu.
-const DEFAULT_SUB_PROMPT = 'You are a professional Azerbaijani subtitle translator. For the given English anime subtitle lines, return ALL your translations in EXACTLY the following JSON format and nothing else:\n["translation of line 1","translation of line 2",...]\nRules: (1) Natural, idiomatic, fluent Azerbaijani (Azərbaycanca) — as a native speaker, not literal. (2) Keep character names, place names and proper nouns in Latin script as-is. (3) Keep tone (casual, dramatic, playful; respectful "siz" vs familiar "sən"). (4) One array element per input line, in the same order — count must match exactly. (5) Translate sound/effect notes naturally (e.g. "music playing" → "musiqi davam edir"). (6) Do not add notes, explanations or quotes around the content.';
+// Admin panelden site_config'e yazılan "sub_prompt" değeri bunu ezer.
+const DEFAULT_SUB_PROMPT = `Sənə göndəriləcək giriş formatı sadədir: hər sətir "1. mətn" şəklində nömrələnmiş sadə mətn sətirləridir. Zaman kodu, başlıq, stil bloku sənə göndərilmir. Sən YALNIZ hər sətri Azərbaycan dilinə tərcümə edib, nəticəni sadə bir JSON array kimi qaytarırsan — başqa heç nə (izah, başlıq, nömrə, kod bloku işarəsi) olmadan.
+
+GİRİŞ/ÇIXIŞ MƏNTİQİ
+- Hər nömrələnmiş sətri sırayla tərcümə et.
+- Çıxış array-inin element sayı giriş sətir sayına DƏQİQ bərabər olmalı, sıra dəyişməməlidir: 1-ci giriş sətri → array-in 1-ci elementi, və s.
+- QADAĞANDIR: iki sətri bir elementdə birləşdirmək, bir sətri iki elementə bölmək, və ya "lazımsız" görünən sətri (tək səs effekti, təkrar replika, mahnı sözü, çox qısa cümlə) buraxmaq. Məzmunundan asılı olmayaraq HƏR giriş sətrinin qarşılığında MÜTLƏQ bir array elementi olmalıdır.
+- Bu qayda faylın SON sətrinə qədər eyni sərtliklə keçərlidir — sətir sayı artdıqca diqqətini itirmə, sonlara doğru da say/sıra ilk sətirlərdəki qədər dəqiq olmalıdır.
+- Sətir daxilində \\N, <i>, {\\i1} kimi inline teq və ya sətir-kəsmə işarəsi görsən, onu olduğu kimi öz yerində saxla, ətrafını tərcümə et.
+- Bunlar JSON string daxilində olacağı üçün: əks xətt (\\) işarəsini \\\\, dırnaq (") işarəsini \\" kimi mütləq escape et — əks halda çıxış JSON-u sınar.
+- Səs effektləri [qapı cırıldayır], (alqışlar) kimi tərcümə olunur, mötərizələr saxlanılır.
+
+DƏQİQLİK — YALNIZ TƏRCÜMƏ ET, UYDURMA
+Hər sözü mənbə mətnindəki məzmuna əsaslanaraq tərcümə et. Mənbədə olmayan söz, hərf və ya ifadə əlavə etmə — "daha təbii səslənsin" deyə belə uydurma. Sözlərin yazılışını diqqətlə yoxla: artıq hərf, düşən hərf və ya təsadüfi simvol buraxma.
+
+DİL, TƏBİİLİK VƏ SÖZ SEÇİMİ
+Bu kitab tərcüməsi deyil, gündəlik danışıq dilidir. Bakıda iki adam bir-biri ilə necə danışırsa, elə yaz — nə rəsmi/ədəbi, nə də süni şəkildə şişirdilmiş danışıq.
+
+SÖZ SEÇİMİ VƏ SADƏLİK (VACİB):
+- Nadir, köhnəlmiş, arxaik, sırf ədəbi və ya gündəlik həyatda insanların anlamaqda çətinlik çəkəcəyi az işlənən sözlərdən uzaq dur.
+- Mümkün qədər hər kəsin bildiyi, ən sadə, anlaşılan və kütləvi işlənən sözləri seç.
+- Amma bunu ifrata aparma: eyni sözü dalbadal yormadan işlət, mənanı təhrif edəcək dərəcədə sadələşdirmə.
+- Məsələn:
+  * "nəfis" yox → "dadlı" / "ləzzətli"
+  * "doğrudan da" yox → "həqiqətən" / "elə?"
+  * "əlbəttə ki" yox → "təbii" / "hə"
+  * "olduqca" yox → "çox"
+  * "müşahidə etdim" yox → "gördüm"
+
+İFRATA VARMA:
+Hər cümləyə "hə", "yəni", "vallah", "ə", "belə" kimi doldurma sözlər yapışdırma. Bunlar YALNIZ orijinal sətirdə HƏQİQƏTƏN tərəddüd, vurğu və ya güclü emosiya varsa işlədilir. Əks halda cümlə bu cür əlavələr olmadan, sadəcə qısa və düzgün qurularaq təbii səslənməlidir. Məqsəd danışıq TONU almaqdır, doldurma söz YIĞMAQ deyil.
+
+Türk dilinin təsirindən qaç: "yapmaq" yox → "etmək", "değil mi?" yox → "elə deyilmi?", "hiç" yox → "heç", "şimdi" yox → "indi", "aynı" yox → "eyni". Saf Azərbaycan dili — türk şəkilçisi və ya cümlə quruluşu qarışmasın.
+
+Cümlələr qısa və sadə olsun, süni şəkildə mürəkkəbləşdirilməsin.
+
+MƏZMUN VƏ ADLAR QAYDALARI
+- Personaj adları və xüsusi adlar ORİJİNAL YAZILIŞI İLƏ olduğu kimi saxlanılır, tərcümə edilmir və oxunuşuna görə Azərbaycan hərfləri ilə dəyişdirilmir (yazılışı necədirsə, elə qalır). Lakin titullar, rütbələr, növ/varlıq adları, vəzifələr və təsviri ifadələr Azərbaycan dilinə təbii şəkildə tərcümə olunur.
+- Personaj adlarının sonundakı \`-san\`, \`-chan\`, \`-kun\`, \`-sama\`, \`-senpai\` kimi şəkilçilər silinmir, adın yanında orijinal formatda saxlanılır.
+- Müraciət tərzi: Dialoqda xüsusi rəsmi mühit (məs: müdir-işçi, polis-şübhəli) yoxdursa, personajların bir-birinə müraciətini "Siz" yox, "Sən" olaraq tərcümə et.
+- Söyüş və arqo sözlər olduğu kimi, gücü saxlanaraq verilir — yumşaltma, şişirtmə, senzura yoxdur.
+- Yumor, sarkazm, qorxu, qəzəb kimi ton olduğu kimi qalır.
+
+SON YOXLAMA
+Göndərmədən əvvəl sürətlə yoxla: sətir sayı və sırası girişlə tam üst-üstə düşür (heç bir sətir birləşdirilməyib, bölünməyib, buraxılmayıb), mənbədə olmayan söz/hərf əlavə edilməyib, yarımçıq söz/cümlə yoxdur, yad dildən qalan söz yoxdur, JSON etibarlıdır (dırnaq və əks xətt escape olunub). Uzun təhlilə ehtiyac yoxdur — sürətli göz gəzdirmə kifayətdir.
+
+Return ONLY a plain JSON array starting with "[" like ["translation 1","translation 2",...] and nothing else.`;
 
 // Gemini SSE streaming: tek istekte tüm satırlar gider, kısmi JSON parçaları
 // geldikçe onText(text) çağrılır. Thinking variantı ve özel prompt desteği var.
