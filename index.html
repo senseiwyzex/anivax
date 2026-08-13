@@ -6099,7 +6099,7 @@ const GEMINI_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL;
 
 // Prompt alanı boş bırakılırsa kullanılan varsayılan çeviri promptu.
-const DEFAULT_SUB_PROMPT = 'You are a professional Azerbaijani subtitle translator. For the given English anime subtitle lines, return ALL your translations in EXACTLY the following JSON format and nothing else:\n{"translations":["translation of line 1","translation of line 2",...]}\nRules: (1) Natural, idiomatic, fluent Azerbaijani (Azərbaycanca) — as a native speaker, not literal. (2) Keep character names, place names and proper nouns in Latin script as-is. (3) Keep tone (casual, dramatic, playful; respectful "siz" vs familiar "sən"). (4) One array element per input line, in the same order — count must match exactly. (5) Translate sound/effect notes naturally (e.g. "music playing" → "musiqi davam edir"). (6) Do not add notes, explanations or quotes around the content.';
+const DEFAULT_SUB_PROMPT = 'You are a professional Azerbaijani subtitle translator. For the given English anime subtitle lines, return ALL your translations in EXACTLY the following JSON format and nothing else:\n["translation of line 1","translation of line 2",...]\nRules: (1) Natural, idiomatic, fluent Azerbaijani (Azərbaycanca) — as a native speaker, not literal. (2) Keep character names, place names and proper nouns in Latin script as-is. (3) Keep tone (casual, dramatic, playful; respectful "siz" vs familiar "sən"). (4) One array element per input line, in the same order — count must match exactly. (5) Translate sound/effect notes naturally (e.g. "music playing" → "musiqi davam edir"). (6) Do not add notes, explanations or quotes around the content.';
 
 // Gemini SSE streaming: tek istekte tüm satırlar gider, kısmi JSON parçaları
 // geldikçe onText(text) çağrılır. Thinking variantı ve özel prompt desteği var.
@@ -6128,16 +6128,15 @@ async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onTex
   const decoder = new TextDecoder();
   let buffer = '';
   let acc = '';
-  while(true){
-    const { value, done } = await reader.read();
-    if(done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split('\n\n');
-    buffer = events.pop();
+  const flush = ()=>{
+    // \r\n\r\n ayrıcılarını normalize et — yoksa tüm stream sona kadar birikir
+    // ve "hepsi birden gelir" (preview çalışmaz). Çoklu data: satırları birleştir.
+    const events = buffer.replace(/\r\n/g, '\n').split('\n\n');
+    buffer = events.pop() || '';
     for(const ev of events){
-      const line = ev.split('\n').find(l => l.startsWith('data:'));
-      if(!line) continue;
-      const payload = line.slice(5).trim();
+      const dataLines = ev.split('\n').filter(l => l.startsWith('data:'));
+      if(!dataLines.length) continue;
+      const payload = dataLines.map(l => l.slice(5).trim()).join('\n');
       if(!payload || payload === '[DONE]') continue;
       try{
         const j = JSON.parse(payload);
@@ -6155,27 +6154,14 @@ async function streamGemini(apiKey, systemPrompt, userText, thinkingLevel, onTex
         }
       }catch(e){}
     }
+  };
+  while(true){
+    const { value, done } = await reader.read();
+    if(done) break;
+    buffer += decoder.decode(value, { stream: true });
+    flush();
   }
-  if(buffer.trim()){
-    const line = buffer.split('\n').find(l => l.startsWith('data:'));
-    if(line){
-      const payload = line.slice(5).trim();
-      if(payload && payload !== '[DONE]'){
-        try{
-          const j = JSON.parse(payload);
-          const parts = j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
-          if(Array.isArray(parts)){
-            let text = '';
-            for(const p of parts){ if(p && !p.thought && p.text) text += p.text; }
-            if(text){
-              acc = acc && text.startsWith(acc) ? text : acc + text;
-              onText(acc);
-            }
-          }
-        }catch(e){}
-      }
-    }
-  }
+  flush();
 }
 
 // Akış halindeki kısmi JSON'dan TAMAMLANMIŞ string elemanlarını çıkarır.
