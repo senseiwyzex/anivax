@@ -94,8 +94,11 @@ Deno.serve(async (req) => {
     return json({ status: 400, error: { message: 'userText is required' } }, 400);
   }
   const systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt.trim() : '';
-  // Paylaşımlı havuzdaki tüm key'ler HIGH variant ile çalışır (kullanıcı kararı).
-  const thinkingLevel = 'HIGH';
+  // Admin panelden belirlenen veya istekten gelen thinkingLevel (varsayılan: HIGH).
+  const validLevels = ['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'];
+  const thinkingLevel = typeof body.thinkingLevel === 'string' && validLevels.includes(body.thinkingLevel.trim().toUpperCase())
+    ? body.thinkingLevel.trim().toUpperCase()
+    : 'HIGH';
   const isRepair = body.repair === true; // non-streaming onarım isteği
   // Model override: yalnızca güvenli model adları kabul edilir (path injection yok).
   const reqModel = typeof body.model === 'string' && /^[a-zA-Z0-9._-]+$/.test(body.model.trim())

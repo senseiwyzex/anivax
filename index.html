@@ -784,11 +784,24 @@
   <!-- TAB: System settings -->
   <div id="adminTab-system" class="admin-tab-panel hidden">
     <div class="settings-group" style="margin-top:16px;">
-      <div class="settings-label">Global AI Altyazı Modeli</div>
+      <div class="settings-label">Global AI Altyazı Modeli və Variantı</div>
       <div class="settings-card">
         <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:10px;">
-          <div class="settings-row-sub">Bu model site_config tablosundan HERKES için kullanılır (örn. gemini-3.5-flash-lite, gemini-2.5-flash). Kullanıcılar modeli kendileri değiştiremez. Boş bırakılırsa varsayılan model kullanılır. Model değiştirince YENİ çeviriler yeni modelle yapılır; eski cache'ler aynen kalır ve yine kullanılır — isterseniz "Tərcümə keşini təmizlə" butonu ile silebilirsiniz.</div>
-          <input id="adminModelInput" type="text" placeholder="gemini-3.5-flash-lite" spellcheck="false" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:12.5px;outline:none;font-family:inherit;">
+          <div class="settings-row-sub">Bu model və düşüncə variantı site_config tablosundan HERKES üçün istifadə olunur (örn. gemini-3.5-flash-lite, gemini-2.5-flash). İstifadəçilər modeli/variantı dəyişə bilməz. Model dəyişdikdə yeni tərcümələr bu ayarlarla aparılır.</div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:12px; font-weight:600; color:var(--text-dim);">Gemini Modeli:</label>
+            <input id="adminModelInput" type="text" placeholder="gemini-3.5-flash-lite" spellcheck="false" oninput="onAdminModelInputChanged()" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:12.5px;outline:none;font-family:inherit;">
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:12px; font-weight:600; color:var(--text-dim);">Düşüncə Variantı (Thinking Level):</label>
+            <select id="adminThinkingSelect" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:12.5px;outline:none;cursor:pointer;">
+              <option value="high">High (Dərin düşüncə — Ən dəqiq tərcümə / Standart)</option>
+              <option value="medium">Medium (Balanslı düşüncə)</option>
+              <option value="low">Low (Az düşüncə — Sürətli)</option>
+              <option value="minimal">Minimal (Ən sürətli — Düşünməsiz/Minimal)</option>
+            </select>
+            <div id="adminModelVariantHint" style="font-size:11.5px; color:var(--accent); margin-top:2px;"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -796,11 +809,11 @@
       <div class="settings-label">Global AI Altyazı Promptu</div>
       <div class="settings-card">
         <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:10px;">
-          <div class="settings-row-sub">Bu prompt site_config tablosundan HERKES için kullanılır. Kullanıcının KENDİ API anahtarı varsa kendi prompt'u geçerli olur; yoksa bu global prompt kullanılır. Boş bırakılırsa varsayılan prompt kullanılır.</div>
-          <textarea id="adminSubPromptInput" rows="8" placeholder="Global çeviri promptu..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:12.5px;outline:none;resize:vertical;font-family:inherit;"></textarea>
+          <div class="settings-row-sub">Bu prompt site_config tablosundan HERKES üçün istifadə olunur. İstifadəçinin ÖZƏL API açarı varsa öz promptu keçərli olur; yoxsa bu qlobal prompt işlədilir.</div>
+          <textarea id="adminSubPromptInput" rows="8" placeholder="Qlobal tərcümə promptu..." style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:12.5px;outline:none;resize:vertical;font-family:inherit;"></textarea>
           <div style="display:flex; gap:8px;">
-            <button class="btn-primary" style="flex:1;" onclick="saveAdminSubPrompt()">Model + Promptu Kaydet</button>
-            <button class="btn-ghost" onclick="resetAdminSubPrompt()">Varsayılan</button>
+            <button class="btn-primary" style="flex:1;" onclick="saveAdminSubPrompt()">Model + Variant + Promptu Saxla</button>
+            <button class="btn-ghost" onclick="resetAdminSubPrompt()">Standarta Qaytar</button>
           </div>
         </div>
       </div>
@@ -1157,6 +1170,7 @@ function sourceEnabled(name){
 // başına ek istek yok — sayfa açılışında bir kez çekilir (sources ile birlikte).
 let globalSubPrompt = '';
 let globalModel = '';
+let globalThinking = 'high';
 async function loadGlobalSubPrompt(){
   if(!sbReady()) return;
   try{
@@ -1167,8 +1181,11 @@ async function loadGlobalSubPrompt(){
   }catch(e){ console.warn('loadGlobalSubPrompt:', e); }
   try{
     const { data, error } = await withTimeout(sb.from('site_config').select('data').eq('key','ai_model').maybeSingle(), 4000);
-    if(!error && data && data.data && typeof data.data.model === 'string' && data.data.model.trim()){
-      globalModel = data.data.model.trim();
+    if(!error && data && data.data){
+      if(typeof data.data.model === 'string') globalModel = data.data.model.trim();
+      if(typeof data.data.thinking === 'string' && data.data.thinking.trim()){
+        globalThinking = data.data.thinking.trim().toLowerCase();
+      }
     }
   }catch(e){ console.warn('loadGlobalModel:', e); }
 }
@@ -1176,7 +1193,7 @@ async function saveGlobalSubPrompt(){
   if(!sbReady()) return;
   try{
     await withTimeout(sb.from('site_config').upsert({ key:'sub_prompt', data:{ prompt: globalSubPrompt }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
-    await withTimeout(sb.from('site_config').upsert({ key:'ai_model', data:{ model: globalModel }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
+    await withTimeout(sb.from('site_config').upsert({ key:'ai_model', data:{ model: globalModel, thinking: globalThinking }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
   }catch(e){ console.warn('saveGlobalSubPrompt:', e); }
 }
 // Sıralama korunur: Otakuhg (en hızlı) → Bibiemb → Otakuvid. Admin kapatılan
@@ -3338,6 +3355,23 @@ function renderAdminDashboard(){
   }).join('');
 }
 
+ function onAdminModelInputChanged(){
+  const mel = document.getElementById('adminModelInput');
+  const sel = document.getElementById('adminThinkingSelect');
+  const hint = document.getElementById('adminModelVariantHint');
+  if(!mel || !sel) return;
+  const val = (mel.value || '').trim().toLowerCase();
+  if(!val || val.includes('3.5-flash-lite') || val.includes('2.5-flash')){
+    if(hint) hint.textContent = 'İpucu: Flash/Flash-Lite modelləri üçün High (ən dəqiq) və ya Minimal (ən sürətli) tövsiyə olunur.';
+  } else if(val.includes('2.5-pro') || val.includes('pro')){
+    if(hint) hint.textContent = 'İpucu: Pro modelləri üçün High və ya Medium tövsiyə olunur.';
+  } else if(val.includes('1.5') || val.includes('2.0-flash')){
+    if(hint) hint.textContent = 'İpucu: Bu modeldə düşünmə variantı dəstəyi standart rejimdə çalışır.';
+  } else {
+    if(hint) hint.textContent = '';
+  }
+ }
+
  function updateSystemTab(){
   document.getElementById('adminLibCount').textContent = state.library.length + ' ' + (state.lang==='en'?'anime':'anime');
   refreshDirectOtakuBtn();
@@ -3345,28 +3379,37 @@ function renderAdminDashboard(){
   if(prompEl) prompEl.value = globalSubPrompt;
   const modelEl = document.getElementById('adminModelInput');
   if(modelEl) modelEl.value = globalModel;
+  const thinkEl = document.getElementById('adminThinkingSelect');
+  if(thinkEl) thinkEl.value = globalThinking || 'high';
+  onAdminModelInputChanged();
  }
 
  function saveAdminSubPrompt(){
   if(!requireAdmin()) return;
   const el = document.getElementById('adminSubPromptInput');
   const mel = document.getElementById('adminModelInput');
+  const tel = document.getElementById('adminThinkingSelect');
   globalSubPrompt = el ? el.value.trim() : '';
   if(mel) globalModel = mel.value.trim();
+  if(tel) globalThinking = (tel.value || 'high').trim().toLowerCase();
   saveGlobalSubPrompt();
-  showToast(state.lang==='en' ? 'Global AI model + prompt saved for everyone' : (state.lang==='tr' ? 'Global AI model + promptu herkes için kaydedildi' : 'Qlobal AI model + promptu hamı üçün saxlanıldı'));
+  showToast(state.lang==='en' ? 'Global AI model + variant + prompt saved for everyone' : (state.lang==='tr' ? 'Global AI model + variant + prompt herkes için kaydedildi' : 'Qlobal AI model + variant + prompt hamı üçün saxlanıldı'));
  }
 
  function resetAdminSubPrompt(){
   if(!requireAdmin()) return;
   globalSubPrompt = '';
   globalModel = '';
+  globalThinking = 'high';
   saveGlobalSubPrompt();
   const el = document.getElementById('adminSubPromptInput');
   if(el) el.value = '';
   const mel = document.getElementById('adminModelInput');
   if(mel) mel.value = '';
-  showToast(state.lang==='en' ? 'Global AI model + prompt reset to default' : (state.lang==='tr' ? 'Global AI model + promptu varsayılana döndü' : 'Qlobal AI model + promptu standarta qayıtdı'));
+  const tel = document.getElementById('adminThinkingSelect');
+  if(tel) tel.value = 'high';
+  onAdminModelInputChanged();
+  showToast(state.lang==='en' ? 'Global AI model + variant + prompt reset to default' : (state.lang==='tr' ? 'Global AI model + variant + prompt varsayılana döndü' : 'Qlobal AI model + variant + prompt standarta qayıtdı'));
  }
 
 function refreshDirectOtakuBtn(){
@@ -6167,7 +6210,7 @@ async function translateSubtitlesToAz(){
   let aiThinkingPhase = true;
   const aiStartAt = Date.now();
   let aiTicker = null;
-  const aiLevelTag = (apiKey ? (['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal') : 'high').toUpperCase();
+  const aiLevelTag = (apiKey ? (['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal') : (globalThinking || 'high')).toUpperCase();
   const updateBtn = ()=>{
     if(!btn) return;
     const secs = Math.max(1, Math.round((Date.now() - aiStartAt) / 1000));
@@ -6232,9 +6275,10 @@ async function translateSubtitlesToAz(){
     // Tek istek: TÜM satırlar tek Gemini çağrısında gider; SSE streaming ile
     // kısmi JSON geldikçe tamamlanan satırlar hemen blob'a işlenir (preview).
     // Prompt önceliği yukarıda cacheHash için hesaplandı (systemPrompt/aiModel).
+  // Düşünce variantı: kullanıcı kendi API key'i ile kendi variantını seçer; paylaşımlı
+  // havuz admin panelden belirlenen global variant (globalThinking) kullanır.
   const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal';
-  // Paylaşımlı havuz (proxy) HIGH kullanır; kendi key'i olan kullanıcı selector'ü.
-  const effectiveLevel = apiKey ? thinkingLevel : 'high';
+  const effectiveLevel = apiKey ? thinkingLevel : (globalThinking || 'high');
   const numbered = original.map((l,i)=> (i+1) + '. ' + l).join('\n');
 
     let acc = '';
