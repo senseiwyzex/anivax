@@ -150,6 +150,22 @@ async function handleProxy(request, url) {
     // tutmaz; host'u açıkça izinlemek gerekir.
     "ibyteimg.com",
     "byteimg.com",
+    // MegaPlay/Anikoto CDN ailesi. CORS'u açık olanlardan (ncdn.imgnex.top vb.)
+    // tarayıcı doğrudan çeker; referer-şartı koyanlardan (megap.mikora.top vb.)
+    // /proxy üzerinden geçer. Front-hostlar embed'e göre değiştiğinden alt
+    // alanlar suffix eşleşmesiyle yakalanır.
+    "imgnex.top",
+    "akirax.buzz",
+    "nexabloom.top",
+    "mikora.top",
+    "norami.top",
+    "shiora.top",
+    // MegaPlay'in bazı bölümleri segmentleri PNG-maskeli TS olarak ByteDance
+    // CDN'inden (p16/p19-ad-site-sign-sg.tiktokcdn.com) sunar — Megavid'in
+    // maskesinden farksız; stripPngMask yolu üzerinden geçer (isMegapayStream
+    // path imzası tiktokcdn yollarına uymaz, o yüzden doğru şekilde hassaslaşır).
+    "tiktokcdn.com",
+    "tiktokcdn.in",
   ];
   let targetUrl;
   try {
@@ -167,9 +183,18 @@ async function handleProxy(request, url) {
   // bibiemb/vivibebe direct-master family (/public/stream/.../master.m3u8).
   const isOtakuvidStream = /\/hls3?\//i.test(targetUrl.pathname) ||
     /^\/public\/stream\//i.test(targetUrl.pathname);
+  // MegaPlay CDN ailesi: gerçek MPEG-TS segmentleri .png uzantısıyla gelir
+  // (PNG maskesi YOK — strip gerekmez). Megavid'deki tamponlama riskini
+  // almamak için bunlar da doğrudan akış yapar. Measurement-imkânsız*
+  // (*host yerine path): ön-hostlar embed'e göre döner (megap.norami.top,
+  // ncdn.imgnex.top, bb.akirax.buzz, fetch.nexabloom.top ...) — hepsini
+  // tek tek izinlemek kırılgan. Ortak imza: /anime/{32hex}/{32hex}/… veya
+  // /{32hex}/{32hex}/… (master, varyant, segment, altyazı hepsi bu ağaçta).
+  const isMegapayStream = /^(\/anime\/)?[0-9a-f]{32}\/[0-9a-f]{32}\//i.test(targetUrl.pathname);
   const hostAllowed =
     ALLOWED_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
-    isOtakuvidStream;
+    isOtakuvidStream ||
+    isMegapayStream;
   if (!hostAllowed) {
     return new Response("Host not allowed", { status: 403, headers: corsHeaders() });
   }
@@ -297,7 +322,7 @@ async function handleProxy(request, url) {
     // budget and the stream never got a response. Streaming straight through
     // avoids that: bytes flow chunk-by-chunk, no buffering limit. Megavid
     // segments carry the PNG mask, so those still buffer + strip first.
-    if (isOtakuvidStream) {
+    if (isOtakuvidStream || isMegapayStream) {
       return new Response(res.body, { headers: segHeaders });
     }
 
@@ -642,6 +667,198 @@ async function handleAninekoSource(request, url) {
 }
 
 
+// ---- /megapay-source -------------------------------------------------------
+// Anikoto + MegaPlay ağı üzerinden tek istekte çözülür: anikoto.site araması
+// (title → iş içi kimlik), /series/{id} API'si (bölüm → episode_embed_id),
+// megaplay s-2 embed sayfası (embed id → data-id/media id), ve getSourcesNew
+// (media id → m3u8 + EN softsub VTT). CDN host'ları (megap.*, bb.akirax,
+// fetch.nexabloom, tiktokcdn...) referer/Origin kontrolü yaptığından tarayıcı
+// bunları DOĞRUDAN çekemez; frontend `direct:false` görünce m3u8+segment+VTT'yi
+// /proxy üzerinden ister (segmentler akış yapar / maskeli olanlar strip edilir).
+// Sonuç: çözümleme 1 istek, oynatma Megavid'in ~325 istek yükünden uzak.
+//
+// Gets: /megapay-source?title=<title>&ep=<n>
+//   -> { status:"ok", source:"<m3u8>", direct, tracks:[{file,label,lang}], meta }
+//      direct=false → frontend kaynakları /proxy'den çeker.
+
+const ANIKOTO_SITE = "https://anikototv.to";
+const ANIKOTO_API = "https://anikotoapi.site";
+const MEGAPLAY_BASE = "https://megaplay.buzz";
+
+// Anikoto arama sayfasındaki ilk bölüm bağlantılarını (title → slug) çıkarır.
+// Arama sonuçları `<a class="name d-title" href=".../watch/{slug}/ep-{n}" ...>`.
+function parseAnikotoSearchResults(html) {
+  const results = [];
+  const seen = new Set();
+  // data-jp'li ve plain (data-jp'sız) sonuç bağlantılarını iki pass'te çek:
+  // her ikisi de `<a href=".../watch/{slug}/ep-{n}">Ad</a>` biçimindedir.
+  const rxJp = /<a\b[^>]*\bhref="[^"]*\/watch\/([a-z0-9-]+)\/ep-[0-9]+"[^>]*data-jp="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+  const rxPlain = /<a\b[^>]*\bhref="[^"]*\/watch\/([a-z0-9-]+)\/ep-[0-9]+"[^>]*>([\s\S]*?)<\/a>/gi;
+  const clean = (s) => (s || "").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&apos;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;|<|&gt;|>/g, "").replace(/\s+/g, " ").trim();
+  for (const rx of [rxJp, rxPlain]) {
+    let m;
+    while ((m = rx.exec(html))) {
+      const slug = m[1];
+      if (!slug || seen.has(slug)) continue;
+      seen.add(slug);
+      const jp = rx === rxJp ? (m[2] || "") : "";
+      const name = clean(m[m.length - 1]);
+      if (name) results.push({ slug, name, jp });
+    }
+  }
+  return results;
+}
+
+async function handleMegapaySource(request, url) {
+  const title = url.searchParams.get("title");
+  const epRaw = url.searchParams.get("ep") || "1";
+  const ep = parseInt(epRaw, 10) || 1;
+  if (!title) {
+    return new Response(
+      JSON.stringify({ status: "error", message: "Missing title parameter" }),
+      { status: 400, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  }
+
+  const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
+
+  try {
+    // 1) title → anikoto iç kimliği. Arama sayfasından slug alınır (title'ın
+    //    İngilizce/romaji/eşanlamlısıyla normalleştirilmiş eşleşme tercih edilir).
+    const searchRes = await fetchT(`${ANIKOTO_SITE}/search?keyword=${encodeURIComponent(title)}`, {
+      referer: ANIKOTO_SITE + "/",
+      accept: "text/html, */*",
+    }, 10000);
+    const searchHtml = await searchRes.text();
+    const results = parseAnikotoSearchResults(searchHtml);
+    if (results.length === 0) {
+      return new Response(
+        JSON.stringify({ status: "error", message: "Anime not found on Anikoto", retryable: false }),
+        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+    const want = norm(title);
+    const chosen =
+      results.find((r) => r.name && norm(r.name) === want) ||
+      results.find((r) => r.jp && norm(r.jp) === want) ||
+      results[0];
+    const slug = chosen.slug;
+
+    // 2) slug → anikoto iş içi kimliği (watch sayfasındaki data-anime-id).
+    const watchRes = await fetchT(`${ANIKOTO_SITE}/watch/${encodeURIComponent(slug)}/ep-1`, {
+      referer: ANIKOTO_SITE + "/",
+      accept: "text/html, */*",
+    }, 10000);
+    const watchHtml = await watchRes.text();
+    const idMatch = watchHtml.match(/data-anime-id="?(\d+)"?/i);
+    if (!idMatch) {
+      return new Response(
+        JSON.stringify({ status: "error", message: "Could not resolve Anikoto id", retryable: true }),
+        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+    const anikotoId = idMatch[1];
+
+    // 3) iş içi kimlik → bölüm → episode_embed_id (Anikoto API).
+    const seriesRes = await fetchT(`${ANIKOTO_API}/series/${anikotoId}`, {
+      referer: ANIKOTO_SITE + "/",
+      accept: "application/json",
+    }, 10000);
+    const seriesJson = await seriesRes.json().catch(() => null);
+    const episodes = seriesJson && seriesJson.data && Array.isArray(seriesJson.data.episodes)
+      ? seriesJson.data.episodes
+      : [];
+    const epInfo = episodes.find((e) => Number(e.number) === ep) || null;
+    const embedId = epInfo && epInfo.episode_embed_id;
+    if (!embedId) {
+      return new Response(
+        JSON.stringify({ status: "error", message: `Episode ${ep} not found on MegaPlay`, retryable: false }),
+        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+
+    // 4) embed sayfası → data-id (megaplay media kimliği). Bu sayfa Referer
+    //    beklemeden hata döner; megavid embed'deki maske gibi doğrudan çekim.
+    const embedRes = await fetchT(`${MEGAPLAY_BASE}/stream/s-2/${encodeURIComponent(embedId)}/sub`, {
+      referer: MEGAPLAY_BASE + "/",
+      accept: "text/html, */*",
+    }, 10000);
+    const embedHtml = await embedRes.text();
+    const mediaMatch = embedHtml.match(/data-id="(\d+)"/) ||
+      embedHtml.match(/data-mediaid="(\d+)"/);
+    if (!mediaMatch) {
+      return new Response(
+        JSON.stringify({ status: "error", message: "MegaPlay embed rejected", retryable: true }),
+        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+    const mediaId = mediaMatch[1];
+
+    // 5) media id → m3u8 + altyazı track'leri. "AJAX only" koruması X-Requested-With
+    //    ile aşılır; yanıtın söylediği source direkt (CORS açık) oynatılabilir.
+    const sourcesRes = await fetchT(`${MEGAPLAY_BASE}/stream/getSourcesNew?id=${encodeURIComponent(mediaId)}`, {
+      referer: `${MEGAPLAY_BASE}/stream/s-2/${encodeURIComponent(embedId)}/sub`,
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+      accept: "application/json, text/plain, */*",
+    }, 10000);
+    const sourcesJson = await sourcesRes.json().catch(() => null);
+    const playable = sourcesJson && sourcesJson.sources && typeof sourcesJson.sources.file === "string"
+      ? sourcesJson.sources.file
+      : null;
+    if (!playable) {
+      return new Response(
+        JSON.stringify({ status: "error", message: "MegaPlay had no playable stream", retryable: true }),
+        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+
+    // Bazı MegaPlay CDN'leri (ncdn.imgnex.top gibi) CORS'u *açık* tutar ve
+    // tarayıcıdan doğrudan çekilebilir; bazıları (megap.mikora.top vb.) yalnızca
+    // megaplay.buzz Referer'ına 200 döner. Tarayıcı o referansı üretemediği için
+    // böyle yanıtlarda frontend /proxy üzerinden çeker. Probu burada yaparız.
+    // NOT: referer'i KASITLI olarak GÖNDERMİYORUZ — tarayıcı da gönderemeyeceği
+    // için "doğrudan oynatılabilir mi" sorusunun doğru cevabı budur. megap.*
+    // host'ları megaplay referansıyla 200 döner (ACAO:*) ama tarayıcı o
+    // referansı üretemez → bunların direct=false olması gerekir.
+    async function megapayDirectProbe(masterUrl) {
+      try {
+        const res = await fetchT(masterUrl, {}, 8000);
+        if (!res.ok) return false;
+        const acao = (res.headers.get("Access-Control-Allow-Origin") || "").trim();
+        return acao === "*";
+      } catch (e) { return false; }
+    }
+    const direct = await megapayDirectProbe(playable);
+
+    const tracks = (Array.isArray(sourcesJson.tracks) ? sourcesJson.tracks : [])
+      .filter((t) => t && typeof t.file === "string" && /\.vtt$/i.test(t.file.split("?")[0]))
+      .map((t) => ({ file: t.file, label: t.label || "English", lang: "en" }));
+
+    return new Response(
+      JSON.stringify({
+        status: "ok",
+        source: playable,
+        direct,          // true → tarayıcı doğrudan çeker; false → /proxy (worker)
+        tracks,
+        meta: {
+          slug,
+          anikotoId,
+          embedId,
+          mediaId,
+          episode: ep,
+          sourceName: "MegaPlay",
+        },
+      }),
+      { headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  } catch (e) {
+    return new Response(
+      JSON.stringify({ status: "error", message: e.message, retryable: true }),
+      { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  }
+}
+
 // ---- /admin ---------------------------------------------------------------
 // Admin login lives server-side. The key is a Worker secret (ADMIN_KEY), never
 // shipped in the client bundle. Login swaps it for an HttpOnly SameSite cookie,
@@ -720,6 +937,9 @@ export default {
     }
     if (url.pathname === "/anineko-source") {
       return await handleAninekoSource(request, url);
+    }
+    if (url.pathname === "/megapay-source") {
+      return await handleMegapaySource(request, url);
     }
     if (url.pathname === "/proxy") {
       return await handleProxy(request, url);

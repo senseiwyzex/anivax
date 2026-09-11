@@ -1148,7 +1148,7 @@ let currentUser = null; // set on auth state change
 //   key text primary key, data jsonb, updated_at timestamptz default now());
 // Her kaynak tek tek açılıp kapanabilir. Admin pansili "Kaynaklar" sekmesinden
 // isim isim yönetilir; seçili olmayan kaynak oynatma akışında HİÇ çağrılmaz.
-let globalSources = { otakuhg: true, bibiemb: true, otakuvid: true, megavid: true, directOtaku: true };
+let globalSources = { otakuhg: true, bibiemb: true, otakuvid: true, megavid: true, directOtaku: true, megapay: true };
 let globalSourcesLoaded = false;
 async function loadGlobalSources(){
   if(!sbReady()){ globalSourcesLoaded = true; return; }
@@ -2607,6 +2607,7 @@ const TRANSLATE_ENDPOINT = MEGAVID_WORKER_BASE + '/translate';
 // doğrudan CDN'den çeker — worker'a bölüm başına sadece 1-2 istek gider.
 // Megavid'de ~325 istek/bölüm olduğundan Anineko tercih edilir.
 const ANINEKO_SOURCE_PATH = '/anineko-source';
+const MEGAPAY_SOURCE_PATH = '/megapay-source';
 
 let currentMegavidUrl = null;      // resolved m3u8 for the active episode
 let megavidSubtitleUrl = null;     // .vtt track routed through the worker
@@ -3027,8 +3028,84 @@ function vidCanNativeHls(){
   return document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
 }
 
+// ================= MEGAPLAY / ANIKOTO SOURCING =================
+// Anikoto (katalog) + MegaPlay (video depo) ağı üzerinden çözümleme. Worker
+// /megapay-source tüm zinciri tek istekte yapar: title → anikoto iç kimlik →
+// episode_embed_id → s-2 embed → data-id → getSourcesNew (m3u8 + EN softsub).
+// Video ve altyazı CDN'leri (ncdn.imgnex.top / bb.akirax.buzz /
+// fetch.nexabloom.top) CORS'u açık olduğundan tarayıcı hepsini DOĞRUDAN çeker —
+// Megavid gibi /proxy üzerinden ~325 istek/bölüm YOK, tek istek/bölüm.
+
+let megapayLoadPromise = null;
+let megapayLastStatus = 'ok'; // 'ok' | 'missing' | 'transient'
+
+async function megapayResolveSource(anime, episodeNum){
+  const titles = [];
+  if(anime.title && anime.title.english) titles.push(anime.title.english);
+  if(anime.title && anime.title.romaji) titles.push(anime.title.romaji);
+  if(anime.title && anime.title.native) titles.push(anime.title.native);
+  const qs = `${MEGAPAY_SOURCE_PATH}?ep=${episodeNum}`;
+  for(const t of titles){
+    if(!t) continue;
+    try{
+      const res = await fetch(`${MEGAVID_WORKER_BASE}${qs}&title=${encodeURIComponent(t)}`);
+      const data = await res.json().catch(()=>null);
+      if(res.ok && data && data.status === 'ok' && data.source) return data;
+      if(res.ok && data && data.status === 'error' && data.retryable === false) megapayLastStatus = 'missing';
+    }catch(e){ /* try next title */ }
+  }
+  return null;
+}
+
+function loadMegapaySourceIfNeeded(frame, anime, episodeNum){
+  if(megapayLoadPromise) return megapayLoadPromise;
+  megapayLoadPromise = (async ()=>{
+    const src = anime && anime.episodeSources ? anime.episodeSources[episodeNum] : null;
+    const hasTorrent = src && Array.isArray(src.torrents) && src.torrents.length > 0;
+    const hasVideo = !!(src && src.video);
+    if(!sourceEnabled('megapay')){ megapayLastStatus = 'disabled'; return false; }
+    if(hasTorrent || hasVideo) return false;
+
+    const data = await megapayResolveSource(anime, episodeNum);
+    if(!data || !data.source){ if(megapayLastStatus !== 'disabled') megapayLastStatus = 'transient'; return false; }
+    if(currentEpisodeNum !== episodeNum) return false;
+
+    // CDN CORS'u açık (ncdn.imgnex.top gibi) → doğrudan mount. Referer şartı
+    // koyan CDN (megap.mikora.top gibi) → /proxy üzerinden: master'ı çekerken
+    // megaplay referansı gönderir ve playlist içindeki bağıl URL'leri de
+    // /proxy'ye çevirir, böylece segmentler aynı referansla gelir. Altyazı
+    // track'leri de aynı karara uyar.
+    const megapayReferer = 'https://megaplay.buzz/';
+    const routeUrl = data.direct
+      ? (u) => u
+      : (u) => `${MEGAVID_WORKER_BASE}/proxy?url=${encodeURIComponent(u)}&referer=${encodeURIComponent(megapayReferer)}`;
+    const playUrl = routeUrl(data.source);
+    const subTracks = (Array.isArray(data.tracks) ? data.tracks : []).map(t => ({
+      file: routeUrl(t.file),
+      label: t.label || 'English',
+      srclang: t.lang || 'en'
+    }));
+    if(playUrl){
+      removeVideoElements();
+      currentSourceLabel = 'megapay';
+      if(window.Hls || vidCanNativeHls()){
+        await mountHlsPlayer(frame, playUrl, subTracks);
+      } else {
+        await ensureHlsJs();
+        if(window.Hls) await mountHlsPlayer(frame, playUrl, subTracks);
+        else return false;
+      }
+      const r = await waitForPlayback(episodeNum, { timeoutMs: 20000 });
+      if(r === 'ok'){ megapayLastStatus = 'ok'; showPlayerToast('MegaPlay'); return true; }
+      megapayLastStatus = 'transient';
+      return false;
+    }
+    return false;
+  })().finally(()=>{ megapayLoadPromise = null; });
+  return megapayLoadPromise;
+}
+
 function showPlayerToast(msg){
-  const t = document.createElement('div');
   t.textContent = msg;
   t.style.cssText = 'position:absolute; bottom:52px; left:50%; transform:translateX(-50%); background:rgba(10,12,18,0.92); color:#fff; font-size:12px; font-weight:700; padding:8px 14px; border-radius:10px; z-index:30; border:1px solid rgba(255,255,255,0.12);';
   const frame = document.getElementById('playerFrame');
@@ -3445,6 +3522,7 @@ function renderSourcesTab(){
   const wrap = document.getElementById('sourceToggleList');
   if(!wrap) return;
   const FAMILIES = [
+    { key:'megapay', label:'MegaPlay', sub:'Anikoto/MegaPlay ağı — EN softsub, CORS açık, tek istek' },
     { key:'otakuhg', label:'Otakuhg', sub:'Anineko ailesi — en hızlı/güvenilir, Sunucu 1' },
     { key:'bibiemb', label:'Bibiemb', sub:'Anineko ailesi (vivibebe master)' },
     { key:'otakuvid', label:'Otakuvid', sub:'Anineko ailesi — yedek' },
@@ -5178,18 +5256,23 @@ function loadEpisodeIntoPlayer(episodeNum){
           }
         });
       } else {
-        // Otomatik: Megavid varlığını anineko çözümlemesiyle paralel öğren →
-        // yavaş kaynakta karar (sabret vs Megavid'e geç) saniyeler içinde verilir.
-        const megavidInfoP = megavidAvailability(currentDetail, episodeNum).catch(()=>({ available:false, missing:false, data:null }));
-        loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, megavidInfoP).then(didPlay => {
-          if(!didPlay && currentEpisodeNum === episodeNum){
-            loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
-              if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
-                if(megavidLastStatus === 'missing' || megavidLastStatus === 'disabled') showPlayerUnavailable();
-                else mountMegavidIframe(frame, currentDetail, episodeNum);
-              }
-            });
-          }
+        // Otomatik: MegaPlay önce denenir (tek istek/bölüm, CORS açık, EN
+        // softsub kendi içinde) → başarısızsa Anineko aileleri → en son Megavid.
+        loadMegapaySourceIfNeeded(frame, currentDetail, episodeNum).then(didMegapay => {
+          if(didMegapay || currentEpisodeNum !== episodeNum) return;
+          // Megavid varlığını anineko çözümlemesiyle paralel öğren →
+          // yavaş kaynakta karar (sabret vs Megavid'e geç) saniyeler içinde verilir.
+          const megavidInfoP = megavidAvailability(currentDetail, episodeNum).catch(()=>({ available:false, missing:false, data:null }));
+          loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, megavidInfoP).then(didPlay => {
+            if(!didPlay && currentEpisodeNum === episodeNum){
+              loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
+                if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
+                  if(megavidLastStatus === 'missing' || megavidLastStatus === 'disabled') showPlayerUnavailable();
+                  else mountMegavidIframe(frame, currentDetail, episodeNum);
+                }
+              });
+            }
+          });
         });
       }
     }
@@ -5653,7 +5736,16 @@ function attachHlsErrorRecovery(hls, vid){
     // görüp onu kurar ve oynatmayı bekler (burada megavid'e geçmeyiz). Aday
     // kalmadıysa Megavid'e geç.
     const tryNextAninekoOrMegavid = ()=>{
-      if(!isAninekoSourceLabel(currentSourceLabel) || !currentEpisodeNum || !currentDetail) return false;
+      if(!currentEpisodeNum || !currentDetail) return false;
+      if(currentSourceLabel === 'megapay'){
+        // MegaPlay oynatırken fatal → son çare Megavid'e düş.
+        showPlayerToast((state.lang==='en' ? 'MegaPlay failed — switching to Server 2'
+          : (state.lang==='tr' ? 'MegaPlay başarısız — Sunucu 2\'ye geçiliyor'
+             : 'MegaPlay uğursuz oldu — Sunucu 2\'yə keçilir')));
+        loadMegavidSourceIfNeeded(document.getElementById('playerFrame'), currentDetail, currentEpisodeNum).then(()=>{});
+        return true;
+      }
+      if(!isAninekoSourceLabel(currentSourceLabel)) return false;
       if(currentAninekoIndex + 1 < (currentAninekoCandidates || []).length){
         return true; // döngü sıradaki adaya geçecek
       }
@@ -5921,6 +6013,7 @@ function buildPlayerSettingsPanel(src){
     const opts = [
       { v:'auto', label: state.lang==='en'?'Auto':(state.lang==='tr'?'Otomatik':'Avtomatik') }
     ];
+    if(sourceEnabled('megapay')) opts.push({ v:'megapay', label:'MegaPlay' });
     const families = [
       { k:'otakuhg', label:'Otakuhg' },
       { k:'bibiemb', label:'Bibiemb' },
@@ -5936,6 +6029,7 @@ function buildPlayerSettingsPanel(src){
       let active = false;
       if(o.v === 'auto') active = pref === 'auto';
       else if(o.v === 'megavid') active = pref === 'megavid' || (!isAninekoSourceLabel(currentSourceLabel) && currentSourceLabel === 'megavid');
+      else if(o.v === 'megapay') active = pref === 'megapay' || currentSourceLabel === 'megapay';
       else active = pref === o.v || activeFamily === o.v.slice(6);
       return `<button class="option-pill ${active?'active':''}" onclick="setSourcePref('${o.v}')">${o.label}</button>`;
     }).join('');
