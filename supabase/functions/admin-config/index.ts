@@ -95,6 +95,17 @@ Deno.serve(async (req) => {
     saved.model = ok;
   }
 
+  // Kaynak anahtarları (sources: otakuhg/bibiemb/otakuvid/megavid/megapay/
+  // directOtaku) — aynı RLS duvarı burada da vardı: anon toggle sahte
+  // görünür, refresh geri alırdı. Merge yazılır (verilmeyen anahtar korunur).
+  if (body.sources && typeof body.sources === 'object' && !Array.isArray(body.sources)) {
+    const cur = (await readCfg('sources')) || {};
+    const data: any = { ...cur, ...body.sources };
+    const ok = await writeCfg('sources', data);
+    okAll = okAll && ok;
+    saved.sources = ok;
+  }
+
   if (!okAll) {
     return json({ status: 502, error: { message: 'config write failed', saved } }, 502);
   }

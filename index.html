@@ -1205,7 +1205,7 @@ async function saveGlobalSubPrompt(){
 function getAdminCfgKey(){
   try{ return sessionStorage.getItem('anivax_admin_cfg_key') || ''; }catch(e){ return ''; }
 }
-async function saveAdminConfigRemote(prompt, model, thinking){
+async function saveAdminConfigRemote(prompt, model, thinking, sources){
   let key = getAdminCfgKey();
   if(!key){
     try{ key = (window.prompt('Admin anahtarı (config kaydı için, sekme başına bir kez sorulur):', '') || '').trim(); }catch(e){ key = ''; }
@@ -1213,10 +1213,12 @@ async function saveAdminConfigRemote(prompt, model, thinking){
     try{ sessionStorage.setItem('anivax_admin_cfg_key', key); }catch(e){}
   }
   try{
+    const body = { key, prompt, model, thinking };
+    if(sources && typeof sources === 'object') body.sources = sources;
     const resp = await fetch(SUPABASE_URL + '/functions/v1/admin-config', {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + SUPABASE_KEY },
-      body: JSON.stringify({ key, prompt, model, thinking })
+      body: JSON.stringify(body)
     });
     const j = await resp.json().catch(()=>null);
     if(resp.ok && j && j.ok) return { ok:true };
@@ -1230,20 +1232,37 @@ function enabledAninekoFamilies(){
   return ['otakuhg', 'bibiemb', 'otakuvid'].filter(f => sourceEnabled(f));
 }
 async function saveGlobalSources(){
-  if(!sbReady()) return;
+  // Edge function önce (RLS anon engelini aşar), olmazsa direkt upsert
+  // (Supabase oturumu açıksa çalışır). boolean döner — çağrıcı sahte toast basmaz.
+  if(!sbReady()) return false;
   try{
-    await withTimeout(sb.from('site_config').upsert({ key:'sources', data: globalSources, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
-  }catch(e){ console.warn('saveGlobalSources:', e); }
+    const r = await saveAdminConfigRemote(undefined, undefined, undefined, globalSources);
+    if(r.ok) return true;
+    if(!r.needKey && !r.auth){
+      await withTimeout(sb.from('site_config').upsert({ key:'sources', data: globalSources, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
+      return true;
+    }
+    return false;
+  }catch(e){ console.warn('saveGlobalSources:', e); return false; }
 }
 function toggleGlobalSource(name){
   if(!requireAdmin()) return;
   if(!globalSources.hasOwnProperty(name)) return;
   globalSources[name] = globalSources[name] === false;
-  saveGlobalSources();
   renderSourcesTab();
-  showToast((globalSources[name] !== false)
-    ? (state.lang==='en' ? (name + ' enabled for everyone') : (name + ' herkes için açıldı'))
-    : (state.lang==='en' ? (name + ' disabled for everyone') : (name + ' herkes için kapatıldı')));
+  (async ()=>{
+    const ok = await saveGlobalSources();
+    if(ok){
+      showToast((globalSources[name] !== false)
+        ? (state.lang==='en' ? (name + ' enabled for everyone') : (name + ' herkes için açıldı'))
+        : (state.lang==='en' ? (name + ' disabled for everyone') : (name + ' herkes için kapatıldı')));
+    } else {
+      // Dürüst hata: DB gerçeğini geri yükle, UI yalan söylemesin.
+      try{ await loadGlobalSources(); }catch(e){}
+      renderSourcesTab();
+      showToast(state.lang==='en' ? (name + ' NOT saved — wrong admin key or no connection.') : (name + ' KAYDEDİLMEDİ — admin anahtarı yanlış ya da bağlantı yok.'));
+    }
+  })();
 }
 
 // ================= HATA AYIKLAMA (error_logs → Supabase) =================
@@ -2960,8 +2979,9 @@ function megavidProxyUrl(rawUrl, referer){
   if(!rawUrl) return '';
   // Doğrudan mod: master/child/segment isteklerini worker'a hiç sürmeyip tarayıcının
   // doğrudan CDN'den çekmesini sağlar → 1 izleyici ≈ 1-2 worker isteği (sadece
-  // çözümleme + altyazı). Kırılırsa otomatik proxy moda düşülür (admin toggle).
-  if(state.directOtaku && isDirectPlayableUrl(rawUrl)){
+  // çözümleme + altyazı). directOtakuTempFallback yalnızca O bölüm için geçerli
+  // geçici düşüştür (kaydedilmez); kalıcı tercih state.directOtaku'dur.
+  if(state.directOtaku && !directOtakuTempFallback && isDirectPlayableUrl(rawUrl)){
     return rawUrl;
   }
   return `${MEGAVID_WORKER_BASE}/proxy?url=${encodeURIComponent(rawUrl)}&referer=${encodeURIComponent(referer || 'https://megavid.buzz/')}`;
@@ -3552,16 +3572,25 @@ function toggleDirectOtaku(){
   if(!requireAdmin()) return;
   globalSources.directOtaku = globalSources.directOtaku === false;
   state.directOtaku = globalSources.directOtaku !== false;
-  saveSettings();
-  saveGlobalSources();
   refreshDirectOtakuBtn();
   if(typeof renderSourcesTab === 'function') renderSourcesTab();
-  showPlayerToast(state.directOtaku
-    ? (state.lang==='en' ? 'Server 1 direct mode ON — segments stream straight from CDN (0 worker requests)'
-       : (state.lang==='tr' ? 'Sunucu 1 direkt AÇIK — segmentler CDN\'den (0 worker isteği)' : 'Sunucu 1 birbaşa AÇIQ — seqmentlər CDN-dən (0 worker sorğusu)'))
-    : (state.lang==='en' ? 'Server 1 proxy mode restored' : (state.lang==='tr' ? 'Sunucu 1 proxy moda döndü' : 'Sunucu 1 proxy rejiminə qayıdıldı')));
-  const current = currentEpisodeNum;
-  if(current){ playEpisode(current); }
+  (async ()=>{
+    const ok = await saveGlobalSources();
+    if(ok){
+      saveSettings();
+      showPlayerToast(state.directOtaku
+        ? (state.lang==='en' ? 'Server 1 direct mode ON — segments stream straight from CDN (0 worker requests)'
+           : (state.lang==='tr' ? 'Sunucu 1 direkt AÇIK — segmentler CDN\'den (0 worker isteği)' : 'Sunucu 1 birbaşa AÇIQ — seqmentlər CDN-dən (0 worker sorğusu)'))
+        : (state.lang==='en' ? 'Server 1 proxy mode restored' : (state.lang==='tr' ? 'Sunucu 1 proxy moda döndü' : 'Sunucu 1 proxy rejiminə qayıdıldı')));
+      const current = currentEpisodeNum;
+      if(current){ playEpisode(current); }
+    } else {
+      try{ await loadGlobalSources(); }catch(e){}
+      refreshDirectOtakuBtn();
+      if(typeof renderSourcesTab === 'function') renderSourcesTab();
+      showPlayerToast(state.lang==='en' ? 'Toggle NOT saved — wrong admin key or no connection.' : (state.lang==='tr' ? 'Değişiklik KAYDEDİLMEDİ — admin anahtarı yanlış ya da bağlantı yok.' : 'Dəyişiklik SAXLANILMADI — admin açarı yanlışdır və ya bağlantı yoxdur.'));
+    }
+  })();
 }
 
 // Admin "Kaynaklar" sekmesi: Otakuvid / Megavid aç-kapa (global).
@@ -4873,7 +4902,16 @@ let hlsInstance = null;
 let currentHlsLevels = [];       // available renditions of the active HLS stream
 let currentSubtitleTracks = [];  // subtitle track objects for the active episode
 
+// Geçici proxy düşüşü (in-memory, ASLA kaydedilmez): direct bir bölümde kırılırsa
+// yalnızca O bölüm proxy'den oynar. Yeni anime/bölümde direct'e taze şans verilir.
+// Fallback reload AYNI bölümü tekrar çağırır → anahtar aynı → bayrak korunur (döngü yok).
+let directOtakuTempFallback = false;
+let directOtakuTempKey = '';
 function playEpisode(n, skipHistory){
+  try{
+    const k = (currentDetail && currentDetail.id ? currentDetail.id : '?') + ':' + n;
+    if(k !== directOtakuTempKey){ directOtakuTempKey = k; directOtakuTempFallback = false; }
+  }catch(e){}
   currentEpisodeNum = n;
   document.getElementById('playerTitle').textContent = currentDetail ? (currentDetail.title.english||currentDetail.title.romaji) : '—';
   document.getElementById('playerSub').textContent = (state.lang==='en'?'Episode ':'Bölüm ') + n;
@@ -5828,15 +5866,17 @@ function attachHlsErrorRecovery(hls, vid){
           networkRetries++;
           hls.startLoad(); // retry loading the current position
         } else {
-          // Direct mod (segmentler CDN'den) kırıldıysa — CDN CORS/referer
-          // sıkılaştırmış olabilir — otomatik olarak proxy moda düş ve yeniden yükle.
-          if(state.directOtaku && currentEpisodeNum){
-            state.directOtaku = false;
-            saveSettings();
+          // Direct mod (segmentler CDN'den) kırıldıysa — GEÇİCİ olarak proxy moda
+          // düş ve bölümü yeniden yükle. Kalıcı tercihe (state.directOtaku)
+          // DOKUNULMAZ, saveSettings() YOK: tek seferlik CDN tökezlemesi tüm
+          // geleceği yavaş-proxy'ye hapsetmesin (proxy soğuk segmentte ~300x
+          // yavaş olabilir). Yeni bölümde direct'e taze şans verilir.
+          if(state.directOtaku && !directOtakuTempFallback && currentEpisodeNum){
+            directOtakuTempFallback = true;
             refreshDirectOtakuBtn();
-            showPlayerToast((state.lang==='en' ? 'CDN blocked direct access — switched to proxy mode'
-              : (state.lang==='tr' ? 'CDN doğrudan erişimi engelledi — proxy moda geçildi'
-                 : 'CDN birbaşa girişi blokladı — proxy rejiminə keçildi')));
+            showPlayerToast((state.lang==='en' ? 'CDN hiccup — proxy mode for this episode only'
+              : (state.lang==='tr' ? 'CDN takıldı — yalnızca bu bölüm proxy modda'
+                 : 'CDN büdrədi — yalnız bu bölüm proxy rejimində')));
             playEpisode(currentEpisodeNum);
             return;
           }
