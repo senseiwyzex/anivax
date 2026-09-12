@@ -6438,12 +6438,31 @@ async function translateSubtitlesToAz(){
     let repairAll = false;
     if(needFullRetry){
       try{
-        const rep = await translateChunkToAz(apiKey, original, systemPrompt, effectiveLevel, aiModel);
-        if(Array.isArray(rep) && rep.length === cues.length){
-          rep.forEach((line, i)=>{
-            if(line && line.trim()) outLines[i] = line.trim();
-          });
-          repairAll = true;
+        if(USE_PROOFREAD_REPAIR){
+          // Yeni yol (A seçeneği): stream taslağını SOURCE ile redakte et.
+          // Taslak = preview'da dolan outLines (boş kalan '' geçer). Sayı
+          // tutmazsa throw → stream sonucu korunur, alta eski yol denenir.
+          const drafts = outLines.map(t => (typeof t === 'string' && t.trim()) ? t : '');
+          try{
+            const rep = await proofreadChunkToAz(apiKey, original, drafts, effectiveLevel, aiModel);
+            if(Array.isArray(rep) && rep.length === cues.length){
+              rep.forEach((line, i)=>{
+                if(line && line.trim()) outLines[i] = line.trim();
+              });
+              repairAll = true;
+            }
+          }catch(pre){ console.error('[ai-sub] proofread failed, falling back to re-translate:', pre && pre.message ? pre.message : pre); }
+        }
+        if(!repairAll){
+          // Eski yol (korunur): sıfırdan yeniden çevir. Proofread kapalıyken
+          // (USE_PROOFREAD_REPAIR=false) veya proofread başarısızken çalışır.
+          const rep = await translateChunkToAz(apiKey, original, systemPrompt, effectiveLevel, aiModel);
+          if(Array.isArray(rep) && rep.length === cues.length){
+            rep.forEach((line, i)=>{
+              if(line && line.trim()) outLines[i] = line.trim();
+            });
+            repairAll = true;
+          }
         }
       }catch(err){ console.error('[ai-sub] full repair failed:', err); }
     }
@@ -6577,6 +6596,27 @@ SON YOXLAMA
 Göndərmədən əvvəl sürətlə yoxla: sətir sayı və sırası girişlə tam üst-üstə düşür (heç bir sətir birləşdirilməyib, bölünməyib, buraxılmayıb), mənbədə olmayan söz/hərf əlavə edilməyib, yarımçıq söz/cümlə yoxdur, yad dildən qalan söz yoxdur, JSON etibarlıdır (dırnaq və əks xətt escape olunub). Uzun təhlilə ehtiyac yoxdur — sürətli göz gəzdirmə kifayətdir.
 
 Return ONLY a plain JSON array starting with "[" like ["translation 1","translation 2",...] and nothing else.`;
+
+// Proofread repair (A seçeneği — sıfır ek istek): full-array retry, "baştan çevir"
+// yerine "taslağı düzelt" yapar. Eski sistem korunur: USE_PROOFREAD_REPAIR=false
+// yapılırsa çağrı noktası eski translateChunkToAz yoluna döner (tek satır rollback).
+const USE_PROOFREAD_REPAIR = true;
+
+// Proofread promptu: girdi numaralı SOURCE/DRAFT çiftleridir. Model taslağı
+// redakte eder — sıfırdan çevirmez. Kelime seçimi/deyim hatalarını SOURCE'a
+// bakarak düzeltir, düzgün satırlara dokunmaz, boş taslağı çevirir.
+const PROOFREAD_PROMPT = `Sənə nömrələnmiş cütlər göndəriləcək. Hər bənddə SOURCE (orijinal ingilis sətir) və DRAFT (onun Azərbaycan dilinə taslak tərcüməsi) var. Sənin işin SIFIRDAN tərcümə deyil, taslağı REDAKTƏ etməkdir. Nəticəni sadə bir JSON array kimi qaytar — başqa heç nə olmadan.
+
+QAYDALAR
+- Çıxış array-inin element sayı giriş bənd sayına DƏQİQ bərabər olmalı, sıra dəyişməməlidir.
+- DRAFT düzgündürsə, onu OLDUĞU KİMİ saxla — "daha yaxşı" deyə yenidən yazma.
+- DRAFT-də mənasız cümlə, yanlış söz seçimi, hərfi tərcümə olunmuş deyim/ifadə, artıq və ya düşən hərf varsa, SOURCE-a əsaslanaraq DÜZƏLT.
+- DRAFT boşdursa, SOURCE-u normal tərcümə et.
+- QADAĞANDIR: iki bəndi bir elementdə birləşdirmək, bir bəndi bölmək, bənd buraxmaq.
+- \\N, <i>, {\\i1} kimi işarələr yerində saxlanılır; " adam adları orijinal yazılışla saxlanılır; müraciət "Sən" olur; türk sözləri ("yapmaq", "şimdi", "hiç", "aynı") işlədilmir — saf Azərbaycan dili.
+- Bunlar JSON string daxilində olacağı üçün: əks xətt (\\) işarəsini \\\\, dırnaq (") işarəsini \\" kimi mütləq escape et — əks halda çıxış JSON-u sınar.
+
+Return ONLY a plain JSON array starting with "[" like ["fixed 1","fixed 2",...] and nothing else.`;
 
 // Gemini SSE streaming: tek istekte tüm satırlar gider, kısmi JSON parçaları
 // geldikçe onText(text) çağrılır. Thinking variantı ve özel prompt desteği var.
@@ -6712,8 +6752,10 @@ function partialJsonArray(text){
 // Repair: streaming'de kaçan satırlar için non-streaming Gemini çağrısı.
 // Yanıt JSON-array olarak istenir; parse tam dizi → {"translations":[...]}
 // → kısmi dizi sırasıyla düşer. apiKey boşsa edge function proxy'si kullanılır.
-async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel, model){
-  const numbered = lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
+async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel, model, customUserText, strictCount){
+  // customUserText verilirse (proofread yolu) o kullanılır; verilmezse eski
+  // davranış aynen korunur — mevcut çağrılar etkilenmez.
+  const numbered = (typeof customUserText === 'string' && customUserText) ? customUserText : lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
   const useProxy = !(apiKey && apiKey.trim());
   const body = useProxy
     ? { systemPrompt: systemPrompt, userText: numbered, thinkingLevel: String(thinkingLevel || 'minimal').toLowerCase(), repair: true, model: (model && model.trim()) || undefined }
@@ -6756,6 +6798,10 @@ async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel, mo
 
   const out = new Array(lines.length);
   if(Array.isArray(arr)){
+    // strictCount (proofread yolu): ham array uzunluğu tutmazsa pozisyonel
+    // eşleşme bozulur — kısmi uygulama yerine hata fırlat, çağrıcı eski
+    // sonucu korusun. Eski yol (strictCount yok) aynen devam eder.
+    if(strictCount && arr.length !== lines.length) throw new Error('length-mismatch');
     arr.forEach((t, j)=>{
       const text = typeof t === 'string' ? t.trim() : '';
       if(text) out[j] = text;
@@ -6765,6 +6811,24 @@ async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel, mo
     if(!out[i]) out[i] = '';
   }
   if(out.every(t => !t)) throw new Error('no-parse');
+  return out;
+}
+
+// Proofread repair: stream taslağındaki kelime seçimi/deyim hatalarını SOURCE'a
+// bakarak düzeltir. Sıfırdan çevirmez — aynı 1 istek, aynı JSON-array protokolü.
+// sources: orijinal EN satırlar, drafts: stream'den gelen taslak (boş olabilir).
+// Dönüş: cues.length uzunluğunda dizi; sayı tutmazsa çağrıcı stream sonucunu korur.
+async function proofreadChunkToAz(apiKey, sources, drafts, thinkingLevel, model){
+  const n = sources.length;
+  const paired = sources.map((s, i)=>{
+    const d = (drafts && typeof drafts[i] === 'string') ? drafts[i] : '';
+    return (i+1) + '. SOURCE: ' + s + '\n   DRAFT: ' + d;
+  }).join('\n');
+  // HTTP + parse aynen translateChunkToAz'ınkidir (tek istek, repair: true ile
+  // proxy'de JSON schema zorunludur). Beklenen uzunluk = kaynak sayısı.
+  // strictCount=true: sayı tutmazsa throw → çağrıcı stream sonucunu korur.
+  const out = await translateChunkToAz(apiKey, sources, PROOFREAD_PROMPT, thinkingLevel, model, paired, true);
+  if(!Array.isArray(out) || out.length !== n) throw new Error('proofread-length');
   return out;
 }
 
