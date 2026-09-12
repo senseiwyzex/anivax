@@ -1190,11 +1190,39 @@ async function loadGlobalSubPrompt(){
   }catch(e){ console.warn('loadGlobalModel:', e); }
 }
 async function saveGlobalSubPrompt(){
-  if(!sbReady()) return;
+  // boolean döner: RLS anon engelinde false (sessiz yalan yok — çağrıcı toast'u buna göre seçer).
+  if(!sbReady()) return false;
   try{
     await withTimeout(sb.from('site_config').upsert({ key:'sub_prompt', data:{ prompt: globalSubPrompt }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
     await withTimeout(sb.from('site_config').upsert({ key:'ai_model', data:{ model: globalModel, thinking: globalThinking }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
-  }catch(e){ console.warn('saveGlobalSubPrompt:', e); }
+    return true;
+  }catch(e){ console.warn('saveGlobalSubPrompt:', e); return false; }
+}
+// Admin-config edge function üzerinden kayıt: site_config RLS'ı anon yazmayı
+// engeller (auth.uid zorunlu), site admin'i ise worker-cookie'lidir — direkt
+// upsert 403 yer ve refresh'te ayarlar "başa dönerdi". Edge function ADMIN_KEY
+// doğrular, service_role ile yazar. Anahtar sessionStorage'dadır (repoda YOK).
+function getAdminCfgKey(){
+  try{ return sessionStorage.getItem('anivax_admin_cfg_key') || ''; }catch(e){ return ''; }
+}
+async function saveAdminConfigRemote(prompt, model, thinking){
+  let key = getAdminCfgKey();
+  if(!key){
+    try{ key = (window.prompt('Admin anahtarı (config kaydı için, sekme başına bir kez sorulur):', '') || '').trim(); }catch(e){ key = ''; }
+    if(!key) return { ok:false, needKey:true };
+    try{ sessionStorage.setItem('anivax_admin_cfg_key', key); }catch(e){}
+  }
+  try{
+    const resp = await fetch(SUPABASE_URL + '/functions/v1/admin-config', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + SUPABASE_KEY },
+      body: JSON.stringify({ key, prompt, model, thinking })
+    });
+    const j = await resp.json().catch(()=>null);
+    if(resp.ok && j && j.ok) return { ok:true };
+    if(resp.status === 401){ try{ sessionStorage.removeItem('anivax_admin_cfg_key'); }catch(e){} return { ok:false, auth:false }; }
+    return { ok:false };
+  }catch(e){ return { ok:false, net:true }; }
 }
 // Sıralama korunur: Otakuhg (en hızlı) → Bibiemb → Otakuvid. Admin kapatılan
 // aileler burada elenir, böylece hiç istenmeyen sunucuya istek gitmez.
@@ -3461,33 +3489,52 @@ function renderAdminDashboard(){
   onAdminModelInputChanged();
  }
 
- function saveAdminSubPrompt(){
-  if(!requireAdmin()) return;
-  const el = document.getElementById('adminSubPromptInput');
-  const mel = document.getElementById('adminModelInput');
-  const tel = document.getElementById('adminThinkingSelect');
-  globalSubPrompt = el ? el.value.trim() : '';
-  if(mel) globalModel = mel.value.trim();
-  if(tel) globalThinking = (tel.value || 'high').trim().toLowerCase();
-  saveGlobalSubPrompt();
-  showToast(state.lang==='en' ? 'Global AI model + variant + prompt saved for everyone' : (state.lang==='tr' ? 'Global AI model + variant + prompt herkes için kaydedildi' : 'Qlobal AI model + variant + prompt hamı üçün saxlanıldı'));
- }
+  function saveAdminSubPrompt(){
+    if(!requireAdmin()) return;
+    const el = document.getElementById('adminSubPromptInput');
+    const mel = document.getElementById('adminModelInput');
+    const tel = document.getElementById('adminThinkingSelect');
+    const np = el ? el.value.trim() : '';
+    const nm = mel ? mel.value.trim() : '';
+    const nt = tel ? ((tel.value || 'high').trim().toLowerCase()) : 'high';
+    globalSubPrompt = np; globalModel = nm; globalThinking = nt;
+    (async ()=>{
+      const r = await saveAdminConfigRemote(np, nm, nt);
+      let ok = r.ok;
+      if(!ok && !r.needKey && !r.auth){
+        // Fallback: Supabase oturumu açıksa direkt upsert çalışır.
+        ok = await saveGlobalSubPrompt();
+      }
+      if(ok){
+        showToast(state.lang==='en' ? 'Global AI model + variant + prompt saved for everyone' : (state.lang==='tr' ? 'Global AI model + variant + prompt herkes için kaydedildi' : 'Qlobal AI model + variant + prompt hamı üçün saxlanıldı'));
+      } else {
+        // Dürüst hata: DB gerçeğini geri yükle, UI yalan söylemesin.
+        await loadGlobalSubPrompt(); updateSystemTab();
+        showToast(state.lang==='en' ? 'Save FAILED — wrong admin key or no connection. Values reverted.' : (state.lang==='tr' ? 'Kayıt BAŞARISIZ — admin anahtarı yanlış ya da bağlantı yok. Değerler geri alındı.' : 'Yaddaş UĞURSUZ — admin açarı yanlışdır və ya bağlantı yoxdur. Dəyərlər geri alındı.'));
+      }
+    })();
+  }
 
- function resetAdminSubPrompt(){
-  if(!requireAdmin()) return;
-  globalSubPrompt = '';
-  globalModel = '';
-  globalThinking = 'high';
-  saveGlobalSubPrompt();
-  const el = document.getElementById('adminSubPromptInput');
-  if(el) el.value = '';
-  const mel = document.getElementById('adminModelInput');
-  if(mel) mel.value = '';
-  const tel = document.getElementById('adminThinkingSelect');
-  if(tel) tel.value = 'high';
-  onAdminModelInputChanged();
-  showToast(state.lang==='en' ? 'Global AI model + variant + prompt reset to default' : (state.lang==='tr' ? 'Global AI model + variant + prompt varsayılana döndü' : 'Qlobal AI model + variant + prompt standarta qayıtdı'));
- }
+  function resetAdminSubPrompt(){
+   if(!requireAdmin()) return;
+   globalSubPrompt = '';
+   globalModel = '';
+   globalThinking = 'high';
+   (async ()=>{
+     const r = await saveAdminConfigRemote('', '', 'high');
+     const ok = r.ok ? true : await saveGlobalSubPrompt();
+     const el = document.getElementById('adminSubPromptInput');
+     if(el) el.value = '';
+     const mel = document.getElementById('adminModelInput');
+     if(mel) mel.value = '';
+     const tel = document.getElementById('adminThinkingSelect');
+     if(tel) tel.value = 'high';
+     onAdminModelInputChanged();
+     showToast(ok
+       ? (state.lang==='en' ? 'Global AI model + variant + prompt reset to default' : (state.lang==='tr' ? 'Global AI model + variant + prompt varsayılana döndü' : 'Qlobal AI model + variant + prompt standarta qayıtdı'))
+       : (state.lang==='en' ? 'Reset FAILED — not saved.' : (state.lang==='tr' ? 'Sıfırlama BAŞARISIZ — kaydedilmedi.' : 'Sıfırlama UĞURSUZ — saxlanılmadı.')));
+   })();
+  }
 
 function refreshDirectOtakuBtn(){
   const btn = document.getElementById('directOtakuBtn');
@@ -5522,11 +5569,30 @@ function formatTime(sec){
 // file source would, but we can react to and communicate it well.
 function smartSeek(vid, targetSeconds){
   const frame = vid.closest ? vid.closest('.player-frame') : document.getElementById('playerFrame');
-  const isBuffered = Array.from({length: vid.buffered.length}).some((_, i)=>
-    targetSeconds >= vid.buffered.start(i) && targetSeconds <= vid.buffered.end(i)
-  );
-  vid.currentTime = targetSeconds;
-  if(!isBuffered) showSeekSpinner(frame, vid);
+  // Hızlı art arda sarma: her seek yarım kalan fragment yüklemesini iptal edip
+  // yenisini başlatır — yavaş CDN'de bu thrash hiç parça tamamlanamaz, player
+  // donar ("takılıyor, oynatmıyor"). İlk seek anında uygulanır, 250ms içindeki
+  // devam seek'ler birleştirilip SON hedef bir kez uygulanır.
+  if(smartSeek._t){
+    smartSeek._pending = targetSeconds;
+    smartSeek._frame = frame;
+    return;
+  }
+  const applySeek = (t, fr)=>{
+    const ok = Array.from({length: vid.buffered.length}).some((_, i)=>
+      t >= vid.buffered.start(i) && t <= vid.buffered.end(i)
+    );
+    vid.currentTime = t;
+    if(!ok) showSeekSpinner(fr, vid);
+  };
+  applySeek(targetSeconds, frame);
+  smartSeek._t = setTimeout(()=>{
+    smartSeek._t = null;
+    if(smartSeek._pending != null && smartSeek._pending !== targetSeconds){
+      const t = smartSeek._pending; smartSeek._pending = null;
+      applySeek(t, smartSeek._frame);
+    } else smartSeek._pending = null;
+  }, 250);
 }
 
 function showSeekSpinner(frame, vid){
@@ -5895,10 +5961,12 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
       enableWorker: true,
       lowLatencyMode: false,
       backBufferLength: 30, // discard buffer more than 30s behind playhead, frees memory during long sessions
-      // otakuvid CDNs can be slow on cold segments — generous timeouts keep a
-      // seek or a late fragment from stalling the player into an error retry.
-      fragLoadingTimeOut: 60000,
-      fragLoadingMaxRetry: 6,
+      // otakuvid CDNs can be slow on cold segments — but a stuck fragment must
+      // FAIL FAST (failover to next source) instead of freezing the player for
+      // minutes: 20s x 3 (~60s max) rather than 60s x 6. Slow-but-working CDN
+      // still loads (spinner shows), dead CDN fails over quickly.
+      fragLoadingTimeOut: 20000,
+      fragLoadingMaxRetry: 3,
       fragLoadingRetryDelay: 500,
       manifestLoadingTimeOut: 30000,
       levelLoadingTimeOut: 30000
@@ -5919,6 +5987,17 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
     hlsInstance.loadSource(url);
     hlsInstance.attachMedia(vid);
     attachHlsErrorRecovery(hlsInstance, vid);
+    // Stall nudge: seek sonrası parça gelmezse player `waiting`'de sessizce
+    // takılır (fatal error yok, recovery çalışmaz). 5sn bekleyen stall'da
+    // hls.js'i dürt (startLoad) — takılı fragment yeniden denenir.
+    try{
+      let stallT = null;
+      vid.addEventListener('waiting', ()=>{
+        try{ clearTimeout(stallT); }catch(e){}
+        stallT = setTimeout(()=>{ try{ if(hlsInstance) hlsInstance.startLoad(); }catch(e){} }, 5000);
+      });
+      vid.addEventListener('playing', ()=>{ try{ clearTimeout(stallT); }catch(e){} });
+    }catch(e){}
     attachPlayerBehaviors(vid, frame);
     // Subtitles start hidden so the browser waits for the user to toggle them
     // on — but switching requires the cues to be loaded, which is why blob
@@ -6373,16 +6452,21 @@ async function translateSubtitlesToAz(){
   // havuz admin panelden belirlenen global variant (globalThinking) kullanır.
   const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal';
   const effectiveLevel = apiKey ? thinkingLevel : (globalThinking || 'high');
-  const numbered = original.map((l,i)=> (i+1) + '. ' + l).join('\n');
+  // Çift numara: "42. metin [42]" — model birleştirme/bölme yaparsa sondaki
+  // [N] işaretleri sırayı ele verir, kayma local'de yakalanır (sıfır ek istek).
+  const numbered = dualNumber(original);
 
     let acc = '';
     let lastBlob = null;
     let lastCompleted = 0;
-    // Tam JSON-array geldiğinde birebir (sıralı) doldur — KESİN hizalama.
+    // Tam JSON-array geldiğinde birebir (sıralı) doldur — pozisyon doğrulamalı.
+    // verifyPositional hem sayıyı hem [N] sırasını kontrol eder; işaretleri
+    // temizleyip yazar (alttaşıya [42] sızmaz). Doğrulama geçemezse false.
     const fillFromArray = (arr)=>{
-      if(!Array.isArray(arr) || arr.length !== cues.length) return false;
-      for(let i=0;i<arr.length;i++){
-        if(typeof arr[i] === 'string') outLines[i] = arr[i].trim();
+      const v = verifyPositional(arr, cues.length);
+      if(!v.ok) return false;
+      for(let i=0;i<v.cleaned.length;i++){
+        if(typeof v.cleaned[i] === 'string') outLines[i] = v.cleaned[i].trim();
       }
       return true;
     };
@@ -6409,7 +6493,8 @@ async function translateSubtitlesToAz(){
       if(completed.length > lastCompleted){
         lastCompleted = completed.length;
         completed.forEach((t, j)=>{
-          if(t && t.trim() && j < cues.length) outLines[j] = t.trim();
+          // Preview'da [N] işareti görünmesin diye temizlenerek yazılır.
+          if(t && t.trim() && j < cues.length) outLines[j] = stripMarker(t).trim();
         });
         aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
         updateBtn();
@@ -6430,15 +6515,19 @@ async function translateSubtitlesToAz(){
     // Stream bitti — son tamamlanan kısmı işle.
     preview();
 
-    // Satır sayısı doğrulaması: stream'den gelen TAM array'in uzunluğu cue
-    // sayısına eşit değilse (model bir satırı birleştirdi/atlarsa) tümünü
-    // non-streaming repair ile YENİDEN çevir — kayma olsa bile hizalanır.
-    const fullArr = tryParseJsonArray(acc);
-    const needFullRetry = !(Array.isArray(fullArr) && fullArr.length === cues.length);
+    // Satır sayısı + SIRA doğrulaması: verifyPositional uzunluğu ve [N]
+    // işaret sırasını kontrol eder. Birleşme+bölünme aynı anda olursa sayı
+    // tutar ama sıra bozulur → shift=true. Kayma varsa proofread YETMEZ
+    // (sırayı korur), sıfırdan yeniden çeviri gerekir (aşağıda routing).
+    const vFinal = verifyPositional(tryParseJsonArray(acc), cues.length);
+    const needFullRetry = !vFinal.ok;
+    const shiftDetected = vFinal.shift;
     let repairAll = false;
     if(needFullRetry){
       try{
-        if(USE_PROOFREAD_REPAIR){
+        // Kayma tespit edildiyse proofread ATLAMIR — proofread sırayı koruduğu
+        // için kaymayı düzeltemez; doğrudan eski yol (sıfırdan çeviri) çalışır.
+        if(USE_PROOFREAD_REPAIR && !shiftDetected){
           // Yeni yol (A seçeneği): stream taslağını SOURCE ile redakte et.
           // Taslak = preview'da dolan outLines (boş kalan '' geçer). Sayı
           // tutmazsa throw → stream sonucu korunur, alta eski yol denenir.
@@ -6550,7 +6639,7 @@ function geminiBase(model){
 
 // Prompt alanı boş bırakılırsa kullanılan varsayılan çeviri promptu.
 // Admin panelden site_config'e yazılan "sub_prompt" değeri bunu ezer.
-const DEFAULT_SUB_PROMPT = `Sənə göndəriləcək giriş formatı sadədir: hər sətir "1. mətn" şəklində nömrələnmiş sadə mətn sətirləridir. Zaman kodu, başlıq, stil bloku sənə göndərilmir. Sən YALNIZ hər sətri Azərbaycan dilinə tərcümə edib, nəticəni sadə bir JSON array kimi qaytarırsan — başqa heç nə (izah, başlıq, nömrə, kod bloku işarəsi) olmadan.
+const DEFAULT_SUB_PROMPT = `Sənə göndəriləcək giriş formatı sadədir: hər sətir "1. mətn [1]" şəklində nömrələnmiş sadə mətn sətirləridir — başda sıra nömrəsi, sonda təkrar [N] işarəsi. Zaman kodu, başlıq, stil bloku sənə göndərilmir. Sən YALNIZ hər sətri Azərbaycan dilinə tərcümə edib, nəticəni sadə bir JSON array kimi qaytarırsan — başqa heç nə (izah, başlıq, nömrə, kod bloku işarəsi) olmadan. Hər çıxış elementinin sonunda girişdəki [N] işarəsini OLDUĞU KİMİ saxla (məs: "...mətn [42]") — bu işarə sətir sırasını qoruyur, silmə və ya yerini dəyişmə.
 
 GİRİŞ/ÇIXIŞ MƏNTİQİ
 - Hər nömrələnmiş sətri sırayla tərcümə et.
@@ -6605,7 +6694,7 @@ const USE_PROOFREAD_REPAIR = true;
 // Proofread promptu: girdi numaralı SOURCE/DRAFT çiftleridir. Model taslağı
 // redakte eder — sıfırdan çevirmez. Kelime seçimi/deyim hatalarını SOURCE'a
 // bakarak düzeltir, düzgün satırlara dokunmaz, boş taslağı çevirir.
-const PROOFREAD_PROMPT = `Sənə nömrələnmiş cütlər göndəriləcək. Hər bənddə SOURCE (orijinal ingilis sətir) və DRAFT (onun Azərbaycan dilinə taslak tərcüməsi) var. Sənin işin SIFIRDAN tərcümə deyil, taslağı REDAKTƏ etməkdir. Nəticəni sadə bir JSON array kimi qaytar — başqa heç nə olmadan.
+const PROOFREAD_PROMPT = `Sənə nömrələnmiş cütlər göndəriləcək. Hər bənddə SOURCE (orijinal ingilis sətir) və DRAFT (onun Azərbaycan dilinə taslak tərcüməsi, sonda [N] işarəsi ilə) var. Sənin işin SIFIRDAN tərcümə deyil, taslağı REDAKTƏ etməkdir. Nəticəni sadə bir JSON array kimi qaytar — başqa heç nə olmadan. Hər çıxış elementinin sonunda girişdəki [N] işarəsini OLDUĞU KİMİ saxla.
 
 QAYDALAR
 - Çıxış array-inin element sayı giriş bənd sayına DƏQİQ bərabər olmalı, sıra dəyişməməlidir.
@@ -6752,10 +6841,38 @@ function partialJsonArray(text){
 // Repair: streaming'de kaçan satırlar için non-streaming Gemini çağrısı.
 // Yanıt JSON-array olarak istenir; parse tam dizi → {"translations":[...]}
 // → kısmi dizi sırasıyla düşer. apiKey boşsa edge function proxy'si kullanılır.
+// Kayma koruması (shift-guard) yardımcıları — USE_SHIFT_GUARD bayrağı kapalıysa
+// verifyPositional yalnızca uzunluk kontrolüne düşer, davranış eskisiyle aynıdır.
+const USE_SHIFT_GUARD = true;
+// Çift numara: "42. metin [42]". Sondaki [N], modelin satır birleştirme/
+// bölmesini ele verir — kayma local kodda, sıfır ek istekle yakalanır.
+function dualNumber(lines){
+  return lines.map((l,i)=> (i+1) + '. ' + l + ' [' + (i+1) + ']').join('\n');
+}
+// Sondaki saf-sayı işaretini ([42]) temizler. "[qapı səsi]" gibi gerçek
+// metinlere dokunmaz (harf içeren köşeli parantez korunur).
+function stripMarker(t){
+  return String(t).replace(/\s*\[\d+\]\s*$/, '');
+}
+// Pozisyon doğrulama: {ok, shift, cleaned}. Uzunluk tutmazsa ok=false.
+// Uzunluk tutup [N] sırası bozulursa shift=true (birleşme+bölünme kombo).
+// Hiç işaret yoksa (işareti düşüren model / özel prompt) uzunluk yeterlidir.
+function verifyPositional(arr, n){
+  if(!Array.isArray(arr) || arr.length !== n) return { ok:false, shift:false, cleaned:null };
+  if(!USE_SHIFT_GUARD) return { ok:true, shift:false, cleaned: arr.slice() };
+  let marked = 0;
+  const cleaned = arr.map(t => typeof t === 'string' ? stripMarker(t) : t);
+  for(let i=0;i<n;i++){
+    const m = (typeof arr[i] === 'string') ? arr[i].match(/\[(\d+)\]\s*$/) : null;
+    if(m){ marked++; if(Number(m[1]) !== i+1) return { ok:false, shift:true, cleaned:null }; }
+  }
+  return { ok:true, shift:false, cleaned };
+}
+
 async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel, model, customUserText, strictCount){
   // customUserText verilirse (proofread yolu) o kullanılır; verilmezse eski
   // davranış aynen korunur — mevcut çağrılar etkilenmez.
-  const numbered = (typeof customUserText === 'string' && customUserText) ? customUserText : lines.map((l,i)=> (i+1) + '. ' + l).join('\n');
+  const numbered = (typeof customUserText === 'string' && customUserText) ? customUserText : dualNumber(lines);
   const useProxy = !(apiKey && apiKey.trim());
   const body = useProxy
     ? { systemPrompt: systemPrompt, userText: numbered, thinkingLevel: String(thinkingLevel || 'minimal').toLowerCase(), repair: true, model: (model && model.trim()) || undefined }
@@ -6803,7 +6920,9 @@ async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel, mo
     // sonucu korusun. Eski yol (strictCount yok) aynen devam eder.
     if(strictCount && arr.length !== lines.length) throw new Error('length-mismatch');
     arr.forEach((t, j)=>{
-      const text = typeof t === 'string' ? t.trim() : '';
+      // [N] kayma işareti altyazıya sızmasın diye temizlenir. Sadece sondaki
+      // saf sayı işareti ([42]) alınır; "[qapı səsi]" gibi metinler korunur.
+      const text = typeof t === 'string' ? stripMarker(t).trim() : '';
       if(text) out[j] = text;
     });
   }
@@ -6822,7 +6941,8 @@ async function proofreadChunkToAz(apiKey, sources, drafts, thinkingLevel, model)
   const n = sources.length;
   const paired = sources.map((s, i)=>{
     const d = (drafts && typeof drafts[i] === 'string') ? drafts[i] : '';
-    return (i+1) + '. SOURCE: ' + s + '\n   DRAFT: ' + d;
+    // DRAFT sonundaki [N] işareti: proofread çıktısında sıra doğrulaması için.
+    return (i+1) + '. SOURCE: ' + s + '\n   DRAFT: ' + d + ' [' + (i+1) + ']';
   }).join('\n');
   // HTTP + parse aynen translateChunkToAz'ınkidir (tek istek, repair: true ile
   // proxy'de JSON schema zorunludur). Beklenen uzunluk = kaynak sayısı.
