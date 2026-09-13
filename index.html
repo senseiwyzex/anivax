@@ -6485,70 +6485,137 @@ async function translateSubtitlesToAz(){
       return URL.createObjectURL(new Blob([vttLines.join('\n')], { type: 'text/vtt' }));
     };
 
-    // PARÇALI + ÖNCELİKLİ ÇEVİRİ
-    // Eski yol TÜM bölümü 0'dan tek SSE stream'de çeviriyordu; oynatma stream'i
-    // yakalayınca (veya ortadan/devam'dan başlayınca) arka satırlar geç geliyordu.
-    // Şimdi ~CHUNK satırlık küçük isteklere bölünür; ÖNCE oynatma konumundaki
-    // parça, sonra İLERİDEKİ parçalar, en son geride kalanlar çevrilir. Birkaç
-    // parça eşzamanlıdır (7-key rotasyonlu proxy'de istekler ayrı 4s slotlarına
-    // düşer) → ekrandaki satır birkaç saniyede AZ olur, ilerisi oynatma oraya
-    // varmadan hazırdır. Cue zamanları ASLA değişmez; gecikme kaynağı kapanır.
-    const effectiveLevel = apiKey
-      ? (['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal')
-      : (globalThinking || 'high');
-    const CHUNK = 32;
-    const MAX_CONCURRENT = 3;
-    aiThinkingPhase = false;
-    let curT = 0;
-    if(vid && typeof vid.currentTime === 'number' && isFinite(vid.currentTime)) curT = vid.currentTime;
-    let probe = 0;
-    for(let i=0;i<cues.length;i++){ if(cues[i].end > curT){ probe = i; break; } }
-    const nChunks = Math.ceil(cues.length / CHUNK);
-    const startChunk = Math.min(nChunks - 1, Math.floor(probe / CHUNK));
-    const order = [];
-    for(let s = startChunk; s < nChunks; s++) order.push(s);
-    for(let s = 0; s < startChunk; s++) order.push(s);
+    // Tek istek: TÜM satırlar tek Gemini çağrısında gider; SSE streaming ile
+    // kısmi JSON geldikçe tamamlanan satırlar hemen blob'a işlenir (preview).
+    // Prompt önceliği yukarıda cacheHash için hesaplandı (systemPrompt/aiModel).
+  // Düşünce variantı: kullanıcı kendi API key'i ile kendi variantını seçer; paylaşımlı
+  // havuz admin panelden belirlenen global variant (globalThinking) kullanır.
+  const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal';
+  const effectiveLevel = apiKey ? thinkingLevel : (globalThinking || 'high');
+  // Çift numara: "42. metin [42]" — model birleştirme/bölme yaparsa sondaki
+  // [N] işaretleri sırayı ele verir, kayma local'de yakalanır (sıfır ek istek).
+  const numbered = dualNumber(original);
 
+    let acc = '';
     let lastBlob = null;
-    let filledCount = 0;
+    let lastCompleted = 0;
+    // Tam JSON-array geldiğinde birebir (sıralı) doldur — pozisyon doğrulamalı.
+    // verifyPositional hem sayıyı hem [N] sırasını kontrol eder; işaretleri
+    // temizleyip yazar (alttaşıya [42] sızmaz). Doğrulama geçemezse false.
+    const fillFromArray = (arr)=>{
+      const v = verifyPositional(arr, cues.length);
+      if(!v.ok) return false;
+      for(let i=0;i<v.cleaned.length;i++){
+        if(typeof v.cleaned[i] === 'string') outLines[i] = v.cleaned[i].trim();
+      }
+      return true;
+    };
     const render = ()=>{
       if(lastBlob) URL.revokeObjectURL(lastBlob);
       lastBlob = buildBlob();
       trackEl.src = lastBlob;
       if(vid.textTracks && vid.textTracks[newIndex]) vid.textTracks[newIndex].mode = 'showing';
     };
-    const applyChunk = (chunkIdx, lines)=>{
-      const base = chunkIdx * CHUNK;
-      for(let i=0;i<lines.length && base + i < cues.length;i++){
-        const t = lines[i];
-        if(t && String(t).trim()){
-          if(!(outLines[base+i] && outLines[base+i].trim())) filledCount++;
-          outLines[base+i] = String(t).trim();
-        }
+    const preview = ()=>{
+      // 1) Tam dizi geldiyse birebir (sıralı) doldur — kayma imkânsız, KESİN.
+      const full = tryParseJsonArray(acc);
+      if(fillFromArray(full)){
+        lastCompleted = cues.length;
+        aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
+        updateBtn();
+        render();
+        return;
       }
-      aiSubProgress = Math.min(99, Math.round((filledCount / cues.length) * 100));
+      // 2) Tam dizi yoksa kısmi JSON'dan tamamlanan satırları SIRALI yaz (preview).
+      //    Model bir satırı birleştirirse son satırlar boş kalır ve stream sonunda
+      //    full retry devreye girip tümünü doğru hizalar — geçici kayma olmaz.
+      const completed = partialJsonArray(acc);
+      if(completed.length > lastCompleted){
+        lastCompleted = completed.length;
+        completed.forEach((t, j)=>{
+          // Preview'da [N] işareti görünmesin diye temizlenerek yazılır.
+          if(t && t.trim() && j < cues.length) outLines[j] = stripMarker(t).trim();
+        });
+        aiSubProgress = Math.min(99, Math.round((lastCompleted / cues.length) * 100));
+        updateBtn();
+        render();
+      }
+    };
+
+    await streamGemini(apiKey, systemPrompt, numbered, effectiveLevel, (text)=>{
+      aiThinkingPhase = false;
+      acc = text;
+      preview();
+    }, ()=>{
+      // Model düşünüyor — içerik daha akmaya başlamadı, kullanıcıya göster.
+      aiThinkingPhase = true;
       updateBtn();
-      render();
-    };
-    const translateOne = async (chunkIdx)=>{
-      const base = chunkIdx * CHUNK;
-      const slice = original.slice(base, base + CHUNK);
+    }, aiModel);
+
+    // Stream bitti — son tamamlanan kısmı işle.
+    preview();
+
+    // Satır sayısı + SIRA doğrulaması: verifyPositional uzunluğu ve [N]
+    // işaret sırasını kontrol eder. Birleşme+bölünme aynı anda olursa sayı
+    // tutar ama sıra bozulur → shift=true. Kayma varsa proofread YETMEZ
+    // (sırayı korur), sıfırdan yeniden çeviri gerekir (aşağıda routing).
+    const vFinal = verifyPositional(tryParseJsonArray(acc), cues.length);
+    const needFullRetry = !vFinal.ok;
+    const shiftDetected = vFinal.shift;
+    let repairAll = false;
+    if(needFullRetry){
+      try{
+        // Kayma tespit edildiyse proofread ATLAMIR — proofread sırayı koruduğu
+        // için kaymayı düzeltemez; doğrudan eski yol (sıfırdan çeviri) çalışır.
+        if(USE_PROOFREAD_REPAIR && !shiftDetected){
+          // Yeni yol (A seçeneği): stream taslağını SOURCE ile redakte et.
+          // Taslak = preview'da dolan outLines (boş kalan '' geçer). Sayı
+          // tutmazsa throw → stream sonucu korunur, alta eski yol denenir.
+          const drafts = outLines.map(t => (typeof t === 'string' && t.trim()) ? t : '');
+          try{
+            const rep = await proofreadChunkToAz(apiKey, original, drafts, effectiveLevel, aiModel);
+            if(Array.isArray(rep) && rep.length === cues.length){
+              rep.forEach((line, i)=>{
+                if(line && line.trim()) outLines[i] = line.trim();
+              });
+              repairAll = true;
+            }
+          }catch(pre){ console.error('[ai-sub] proofread failed, falling back to re-translate:', pre && pre.message ? pre.message : pre); }
+        }
+        if(!repairAll){
+          // Eski yol (korunur): sıfırdan yeniden çevir. Proofread kapalıyken
+          // (USE_PROOFREAD_REPAIR=false) veya proofread başarısızken çalışır.
+          const rep = await translateChunkToAz(apiKey, original, systemPrompt, effectiveLevel, aiModel);
+          if(Array.isArray(rep) && rep.length === cues.length){
+            rep.forEach((line, i)=>{
+              if(line && line.trim()) outLines[i] = line.trim();
+            });
+            repairAll = true;
+          }
+        }
+      }catch(err){ console.error('[ai-sub] full repair failed:', err); }
+    }
+
+    // Onarım: streaming'de eksik kalan (çevrilemeyen) satırları küçük,
+    // non-streaming bir istekle tamamla — İngilizce satır kalmasın.
+    const missingIdx = [];
+    for(let i=0;i<cues.length;i++){
+      if(!(outLines[i] && outLines[i].trim())) missingIdx.push(i);
+    }
+    if(missingIdx.length && !repairAll){
+      const missingLines = missingIdx.map(idx => original[idx]);
       let rep = null;
-      for(let attempt = 0; attempt < 2 && !rep; attempt++){
-        try{ rep = await translateChunkToAz(apiKey, slice, systemPrompt, effectiveLevel, aiModel, null, true); }
-        catch(e){ console.warn('[ai-sub] chunk ' + chunkIdx + ' try ' + attempt + ':', e && e.message ? e.message : e); }
+      for(let attempt = 0; attempt < 1 && !rep; attempt++){
+        try{ rep = await translateChunkToAz(apiKey, missingLines, systemPrompt, effectiveLevel, aiModel); }
+        catch(err){ console.error('[ai-sub] repair attempt ' + attempt + ':', err && err.message ? err.message : err); }
       }
-      if(rep && rep.length) applyChunk(chunkIdx, rep);
-    };
-    let cursor = 0;
-    const runners = Array.from({ length: Math.min(MAX_CONCURRENT, order.length) }, async ()=>{
-      while(cursor < order.length){
-        const ci = order[cursor++];
-        await translateOne(ci);
+      if(Array.isArray(rep)){
+        rep.forEach((line, j)=>{
+          const idx = missingIdx[j];
+          if(idx != null && line && line.trim()) outLines[idx] = line;
+        });
       }
-    });
-    await Promise.all(runners);
-    render();
+    }
 
     // Kesinleştir: son blob'u kalıcı yap ve track'te göster.
     if(lastBlob) URL.revokeObjectURL(lastBlob);
@@ -6888,18 +6955,10 @@ async function translateChunkToAz(apiKey, lines, systemPrompt, thinkingLevel, mo
 
   const out = new Array(lines.length);
   if(Array.isArray(arr)){
-    // strictCount (proofread yolu + parçalı çeviri): ham array uzunluğu
-    // tutmazsa pozisyonel eşleşme bozulur — kısmi uygulama yerine hata
-    // fırlat, çağrıcı eski sonucu korusun / parçayı yeniden denesin.
+    // strictCount (proofread yolu): ham array uzunluğu tutmazsa pozisyonel
+    // eşleşme bozulur — kısmi uygulama yerine hata fırlat, çağrıcı eski
+    // sonucu korusun. Eski yol (strictCount yok) aynen devam eder.
     if(strictCount && arr.length !== lines.length) throw new Error('length-mismatch');
-    // Kayma koruması: uzunluk tutsa bile satır sonundaki [N] işareti sıraya
-    // uymuyorsa (birleşme+bölünme kombo) pozisyonel yazım bozuk olur → at.
-    if(strictCount && USE_SHIFT_GUARD){
-      for(let j=0;j<arr.length;j++){
-        const m = String(arr[j]).match(/\[(\d+)\]\s*$/);
-        if(m && Number(m[1]) !== j+1) throw new Error('pos-shift@' + j);
-      }
-    }
     arr.forEach((t, j)=>{
       // [N] kayma işareti altyazıya sızmasın diye temizlenir. Sadece sondaki
       // saf sayı işareti ([42]) alınır; "[qapı səsi]" gibi metinler korunur.
