@@ -5617,26 +5617,11 @@ function smartSeek(vid, targetSeconds){
     return;
   }
   const applySeek = (t, fr)=>{
-    const ok = vid.buffered.length && Array.from({length: vid.buffered.length}).some((_, i)=>
+    const ok = Array.from({length: vid.buffered.length}).some((_, i)=>
       t >= vid.buffered.start(i) && t <= vid.buffered.end(i)
     );
-    const wasPlaying = !vid.paused && !vid.ended;
     vid.currentTime = t;
     if(!ok) showSeekSpinner(fr, vid);
-    // HLS: seek sonrası fragment hemen yüklensin — 5sn stall nudge beklemeden
-    // dürtülürse "öne sarınca takılı kalma / pause-play ile düzelme" biter.
-    // HLS.js seeking olayını dinler ama yavaş CDN'de startLoad'u kaçırabiliyor;
-    // açıkça dürtmek anında yüklemeyi tetikler. wasPlaying ise play devam etsin.
-    try{
-      if(hlsInstance){
-        // currentTime set edildikten hemen sonra startLoad; bir tick geciktir
-        // ki tarayıcı seeking state'ine geçsin, sonra yükleme başlasın.
-        setTimeout(()=>{ try{ hlsInstance.startLoad(); }catch(e){} }, 40);
-        if(wasPlaying) setTimeout(()=>{ try{ vid.play().catch(()=>{}); }catch(e){} }, 80);
-      } else if(wasPlaying){
-        vid.play().catch(()=>{});
-      }
-    }catch(e){}
   };
   applySeek(targetSeconds, frame);
   smartSeek._t = setTimeout(()=>{
@@ -6042,29 +6027,16 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
     hlsInstance.loadSource(url);
     hlsInstance.attachMedia(vid);
     attachHlsErrorRecovery(hlsInstance, vid);
-    // Stall nudge: seek / ilk yükleme sonrası parça gelmezse player
-    // `waiting`'de sessizce takılır (fatal yok, recovery çalışmaz). 5s çok
-    // geç — kullanıcı "öne sarınca takılıyor, pause/play ile düzeliyor" diyor;
-    // 1.2s'de dürtünce anında toparlar. seeking'de de hemen dürt.
+    // Stall nudge: seek sonrası parça gelmezse player `waiting`'de sessizce
+    // takılır (fatal error yok, recovery çalışmaz). 5sn bekleyen stall'da
+    // hls.js'i dürt (startLoad) — takılı fragment yeniden denenir.
     try{
       let stallT = null;
-      const nudge = ()=>{ try{ if(hlsInstance) hlsInstance.startLoad(); }catch(e){} };
-      vid.addEventListener('seeking', ()=>{ try{ setTimeout(nudge, 60); }catch(e){} });
       vid.addEventListener('waiting', ()=>{
         try{ clearTimeout(stallT); }catch(e){}
-        stallT = setTimeout(nudge, 1200);
+        stallT = setTimeout(()=>{ try{ if(hlsInstance) hlsInstance.startLoad(); }catch(e){} }, 5000);
       });
       vid.addEventListener('playing', ()=>{ try{ clearTimeout(stallT); }catch(e){} });
-      // İlk yüklemede 00:00'da takılı kalma: manifest geldikten 2sn sonra hâlâ
-      // 0'da ve oynamıyorsa bir kez dürt (frag 20s timeout beklenmez).
-      setTimeout(()=>{
-        try{
-          if(vid.currentTime < 0.3 && vid.paused && !vid.ended && hlsInstance){
-            nudge();
-            vid.play().catch(()=>{});
-          }
-        }catch(e){}
-      }, 2200);
     }catch(e){}
     attachPlayerBehaviors(vid, frame);
     // Subtitles start hidden so the browser waits for the user to toggle them
