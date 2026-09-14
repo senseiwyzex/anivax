@@ -2939,7 +2939,8 @@ async function waitForPlayback(episodeNum, opts){
 function markSourceBroken(animeId, episodeNum){
   if(!animeId || !episodeNum) return;
   state.brokenSources = state.brokenSources || {};
-  state.brokenSources[animeId + ':' + episodeNum] = true;
+  // Zaman damgalı: 7 gün sonra (Sunucu 1 kurtulabilir) yeniden denenir.
+  state.brokenSources[animeId + ':' + episodeNum] = Date.now();
   // Sınırsız büyümesin — 100 kayıt tut, en eskisini at.
   const keys = Object.keys(state.brokenSources);
   if(keys.length > 100){
@@ -2954,7 +2955,10 @@ function clearSourceBroken(animeId, episodeNum){
   if(delete state.brokenSources[animeId + ':' + episodeNum]) saveSettings();
 }
 function isSourceBroken(animeId, episodeNum){
-  return !!(state.brokenSources && state.brokenSources[animeId + ':' + episodeNum]);
+  if(!state.brokenSources || !animeId || !episodeNum) return false;
+  const v = state.brokenSources[animeId + ':' + episodeNum];
+  if(typeof v !== 'number') return false; // eski 'true' → yeniden dene
+  return (Date.now() - v) < (7 * 24 * 60 * 60 * 1000);
 }
 
 // AniList id + idMal kullanarak Megavid'den m3u8 + softsub listesi alır.
@@ -3148,6 +3152,7 @@ function vidCanNativeHls(){
 
 let megapayLoadPromise = null;
 let megapayLastStatus = 'ok'; // 'ok' | 'missing' | 'transient'
+let megapayCooldowns = {};    // id#ep → ts; aynı bölümde takılma tekrar yaşanmasın (2sa)
 
 async function megapayResolveSource(anime, episodeNum){
   const titles = [];
@@ -3188,9 +3193,19 @@ function loadMegapaySourceIfNeeded(frame, anime, episodeNum){
     const hasVideo = !!(src && src.video);
     if(!sourceEnabled('megapay')){ megapayLastStatus = 'disabled'; return false; }
     if(hasTorrent || hasVideo) return false;
+    // Daha önce bu bölümde "yok/reklam-akışı" dönen feed'ler hatırlanır:
+    // 20sn'lik kara deliği tekrar yaşatmaz, zincir hemen sonraki kaynağa geçer.
+    if(isSourceBroken(anime && anime.id, episodeNum)){ megapayLastStatus = 'missing'; return false; }
+    // Aynı bölümde yakın zamanda takıldıysa tekrar 8sn bekleme — hemen sonraki kaynak.
+    const cdKey = (anime && anime.id) + '#' + episodeNum;
+    if(megapayCooldowns[cdKey] && (Date.now() - megapayCooldowns[cdKey]) < 2 * 3600 * 1000){ megapayLastStatus = 'missing'; return false; }
 
     const data = await megapayResolveSource(anime, episodeNum);
-    if(!data || !data.source){ if(megapayLastStatus !== 'disabled') megapayLastStatus = 'transient'; return false; }
+    if(!data || !data.source){
+      if(megapayLastStatus !== 'disabled' && megapayLastStatus !== 'missing') megapayLastStatus = 'transient';
+      else if(megapayLastStatus === 'missing') markSourceBroken(anime && anime.id, episodeNum);
+      return false;
+    }
     if(currentEpisodeNum !== episodeNum) return false;
 
     // CDN CORS'u açık (ncdn.imgnex.top gibi) → doğrudan mount. Referer şartı
@@ -3218,9 +3233,12 @@ function loadMegapaySourceIfNeeded(frame, anime, episodeNum){
         if(window.Hls) await mountHlsPlayer(frame, playUrl, subTracks);
         else return false;
       }
-      const r = await waitForPlayback(episodeNum, { timeoutMs: 20000 });
+      // Decode-guard + hard 8sn tavan: sağlıklı MegaPlay 1-3sn'de oynar; bugün
+      // gördüğümüz takılma ("parça hiç denenmez") ancak zamana dayalı kesilir.
+      const r = await waitForPlayback(episodeNum, { timeoutMs: 8000 });
       if(r === 'ok'){ megapayLastStatus = 'ok'; showPlayerToast('MegaPlay'); return true; }
       megapayLastStatus = 'transient';
+      megapayCooldowns[cdKey] = Date.now(); // bu oturumda tekrar deneme
       return false;
     }
     return false;
@@ -5043,6 +5061,7 @@ function saveEpisodeSource(){
 
 let currentEpisodeNum = null;
 let hlsInstance = null;
+let hlsDecodeWatchdog = null;    // reklam-görseli akışlarını hızlı yakalar
 let currentHlsLevels = [];       // available renditions of the active HLS stream
 let currentSubtitleTracks = [];  // subtitle track objects for the active episode
 
@@ -5527,6 +5546,7 @@ function loadEpisodeIntoPlayer(episodeNum){
 }
 
 function removeVideoElements(){
+  if(hlsDecodeWatchdog){ try{ clearInterval(hlsDecodeWatchdog); }catch(e){} hlsDecodeWatchdog = null; }
   if(hlsInstance){ try{ hlsInstance.destroy(); }catch(e){} hlsInstance = null; }
 
   // Critical: pausing and clearing the src BEFORE removing the element.
@@ -5589,6 +5609,7 @@ function mountYouTubePlayer(frame, videoId){
 }
 
 function mountDirectPlayer(frame, url, subtitleUrl){
+  playbackActivity = { last: Date.now(), fatal: false }; // yeni mount → temiz durum
   const vid = document.createElement('video');
   vid.id = 'mainVideoEl';
   vid.controls = false;
@@ -6350,6 +6371,56 @@ async function mountHlsPlayer(frame, url, subtitleTracks){  playbackActivity = {
       manifestLoadingTimeOut: 30000,
       levelLoadingTimeOut: 30000
     });
+
+    // DECODE-GUARD: reklam-görseli / bozuk akışta parçalar "yüklenir" (200) ama
+    // ya hiç buffer'a yazılamaz (görüntü/TS değil) ya da yazılsa da kare üretmez.
+    // İki durum da videoWidth hiç çıkmadan teşhis edilebilir — 20sn beklemek
+    // yerine playbackActivity'i fatal yap (waitForPlayback hemen 'fatal' döner).
+    try{
+      let attemptT = 0, attempts = 0, decodePending = 0;
+      const markAttempt = () => { if(!attemptT) attemptT = Date.now(); attempts++; };
+      hlsInstance.on(Hls.Events.FRAG_LOADED, markAttempt);
+      hlsInstance.on(Hls.Events.FRAG_LOAD_ERROR, markAttempt);
+      const watchdog = setInterval(()=>{
+        try{
+          if(!hlsInstance || hlsInstance !== window.__curHlsRef){ clearInterval(watchdog); return; }
+          if(playbackActivity.fatal){ clearInterval(watchdog); return; }
+          const v = document.getElementById('mainVideoEl');
+          if(!v){ clearInterval(watchdog); return; }
+          const now = Date.now();
+          if(v.videoWidth > 0 || v.readyState >= 2){ decodePending = 0; return; }
+          const media = hlsInstance.media;
+          const buffered = media && media.buffered && media.buffered.length ? media.buffered.end(media.buffered.length - 1) : 0;
+          window.__hlsDbg = { attemptT, attempts, decodePending, buffered, width: v.videoWidth, rs: v.readyState, t: v.currentTime };
+          if(!attemptT) return; // henüz parça denenmedi — sabırla bekle
+          if(attempts >= 1 && buffered === 0 && (now - attemptT) > 3500){
+            // Parça geldi ama hiç buffer'a yazılamadı → görüntü-akış (reklam) bloğu.
+            hlsFailNoDecode();
+            clearInterval(watchdog);
+            return;
+          }
+          if(buffered > 0){
+            if(!decodePending) decodePending = now;
+            else if((now - decodePending) > 5000){ // buffer var ama kare yok
+              hlsFailNoDecode();
+              clearInterval(watchdog);
+              return;
+            }
+          } else {
+            decodePending = 0;
+          }
+        }catch(e){}
+      }, 700);
+      function hlsFailNoDecode(){
+        try{
+          logClientError({ source:'player', message: 'No decode frames (ad-image/corrupt stream)', context: (currentDetail ? ((currentDetail.title&&currentDetail.title.romaji)||currentDetail.id) + ' ep' + currentEpisodeNum : 'ep' + currentEpisodeNum) + ' [' + currentSourceLabel + ']' });
+        }catch(e){}
+        playbackActivity.fatal = true;
+      }
+      window.__curHlsRef = hlsInstance;
+      if(hlsDecodeWatchdog){ try{ clearInterval(hlsDecodeWatchdog); }catch(e){} }
+      hlsDecodeWatchdog = watchdog;
+    }catch(e){}
 
     // Populate the quality pills from the parsed manifest's renditions.
     hlsInstance.on(Hls.Events.MANIFEST_PARSED, ()=>{

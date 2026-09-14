@@ -1257,6 +1257,41 @@ async function handleMegapaySource(request, url) {
     }
     const direct = await megapayDirectProbe(playable);
 
+    // REKLAM-GUARD'ı: bazı feed'ler bölüm videosunu kaldırıp yerine tamamen
+    // TikTok reklam görselleri (`.image`/`.png`) koyuyor. Tarayıcı bunları
+    // "video" diye yükleyip hiç kare üretemez → montaj yapıp 20sn bekletmek
+    // yerine master+media playlist'i hızlıca sınıflandır ve burada kes.
+    // Playlist'ler istek-bazlı dönebileceği için %40+ reklam oranı şart
+    // koşulur (ara-ara reklam içeren normal akışlar elenmez).
+    const megapayRef = MEGAPLAY_BASE + "/";
+    const AD_HOST_RX = /tiktokcdn|\.(?:image|png|jpe?g)(?:$|[?&])|doubleclick|googlesyndication|ad-server|adserver/i;
+    async function megapayAdGuard(masterUrl) {
+      try {
+        const masterRes = await fetchT(masterUrl, { referer: megapayRef, accept: "*/*" }, 6000);
+        if (!masterRes.ok) return null;
+        const mText = await masterRes.text();
+        const mFrags = mText.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+        const mediaUrl = mFrags.find((u) => /^https?:/i.test(u));
+        if (!mediaUrl) return null; // tek parçalı m3u8 — sınıflandırma yok
+        const mediaRes = await fetchT(mediaUrl, { referer: megapayRef, accept: "*/*" }, 6000);
+        if (!mediaRes.ok) return null;
+        const mediaText = await mediaRes.text();
+        const frags = mediaText.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+        if (frags.length === 0) return null;
+        const ads = frags.filter((u) => AD_HOST_RX.test(u)).length;
+        return ads / frags.length >= 0.4;
+      } catch (e) {
+        return null; // sınıflandırılamadı → tarayıcı tarafı karar verir
+      }
+    }
+    const adOnly = await megapayAdGuard(playable);
+    if (adOnly) {
+      return new Response(
+        JSON.stringify({ status: "error", code: "ads-only", message: "Episode feed is ad-only right now", retryable: false }),
+        { status: 200, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+
     const tracks = (Array.isArray(sourcesJson.tracks) ? sourcesJson.tracks : [])
       .filter((t) => t && typeof t.file === "string" && /\.vtt$/i.test(t.file.split("?")[0]))
       .map((t) => ({ file: t.file, label: t.label || "English", lang: "en" }));
