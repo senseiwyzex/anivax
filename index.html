@@ -3308,11 +3308,20 @@ function loadArchiveSourceIfNeeded(frame, anime, episodeNum){
 }
 
 function showPlayerToast(msg){
-  t.textContent = msg;
-  t.style.cssText = 'position:absolute; bottom:52px; left:50%; transform:translateX(-50%); background:rgba(10,12,18,0.92); color:#fff; font-size:12px; font-weight:700; padding:8px 14px; border-radius:10px; z-index:30; border:1px solid rgba(255,255,255,0.12);';
-  const frame = document.getElementById('playerFrame');
-  if(frame) frame.appendChild(t);
-  setTimeout(()=>{ try{ t.remove(); }catch(e){} }, 3000);
+  // Toast asla oynatmayı bozamaz: kendi elementini yaratır, her şeyi yutar.
+  // (Eskiden tanımsız `t` globali `function t(key)` i18n yardımcısına çarpıp
+  // her çağrıda patlıyordu → başarılı kaynak bile `false` dönüp sökülüyordu.)
+  try{
+    let el = document.getElementById('playerToast');
+    if(!el){ el = document.createElement('div'); el.id = 'playerToast'; }
+    el.textContent = msg;
+    el.style.cssText = 'position:absolute; bottom:52px; left:50%; transform:translateX(-50%); background:rgba(10,12,18,0.92); color:#fff; font-size:12px; font-weight:700; padding:8px 14px; border-radius:10px; z-index:30; border:1px solid rgba(255,255,255,0.12);';
+    const frame = document.getElementById('playerFrame');
+    if(frame) frame.appendChild(el);
+    else if(el.parentNode !== document.body) document.body.appendChild(el);
+    clearTimeout(showPlayerToast._t);
+    showPlayerToast._t = setTimeout(()=>{ try{ el.remove(); }catch(e){} }, 3000);
+  }catch(e){}
 }
 
 // Nyaa "view" sayfası URL'ini doğrudan .torrent indirme linkine çevirir.
