@@ -9,7 +9,7 @@
 // Bu fonksiyon ADMIN_KEY secret'ını doğrular, yazmayı service_role ile yapar.
 // ADMIN_KEY secret'ı dashboard/Management API ile kurulur (değeri repoda YOK).
 //
-// İstek gövdesi: { key, prompt?, model?, thinking? } (eksik alanlar korunur)
+// İstek gövdesi: { key, prompt?, model?, thinking?, proofThinking? } (eksik alanlar korunur)
 // Yanıt: { ok:true, saved:{prompt,model,thinking} } ya da { status, error }.
 // ============================================================================
 
@@ -85,11 +85,16 @@ Deno.serve(async (req) => {
     okAll = okAll && ok;
     saved.prompt = ok;
   }
-  if (typeof body.model === 'string' || typeof body.thinking === 'string') {
+  if (typeof body.model === 'string' || typeof body.thinking === 'string' || typeof body.proofThinking === 'string') {
     const cur = (await readCfg('ai_model')) || {};
     const data: any = { ...cur };
     if (typeof body.model === 'string') data.model = body.model;
     if (typeof body.thinking === 'string') data.thinking = body.thinking;
+    // Redaktör thinking'i (site_config ai_model.proofThinking) — aynı merge,
+    // verilmeyen alan korunur. Geçersiz değer yazılmaz.
+    if (typeof body.proofThinking === 'string' && ['minimal','low','medium','high'].includes(body.proofThinking.trim().toLowerCase())) {
+      data.proofThinking = body.proofThinking.trim().toLowerCase();
+    }
     const ok = await writeCfg('ai_model', data);
     okAll = okAll && ok;
     saved.model = ok;

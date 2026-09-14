@@ -802,6 +802,16 @@
             </select>
             <div id="adminModelVariantHint" style="font-size:11.5px; color:var(--accent); margin-top:2px;"></div>
           </div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:12px; font-weight:600; color:var(--text-dim);">Redaktör Düşüncə Variantı (2. yoxlama — gemini-3.1-flash-lite):</label>
+            <select id="adminProofThinkingSelect" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:12.5px;outline:none;cursor:pointer;">
+              <option value="low">Low (Tövsiyə — redaktörlük dar işdir, sürətli)</option>
+              <option value="minimal">Minimal (Ən sürətli)</option>
+              <option value="medium">Medium (Balanslı)</option>
+              <option value="high">High (Ən dəqiq — yavaş)</option>
+            </select>
+            <div style="font-size:11.5px; color:var(--text-dim);">Hər bölüm sonunda çalışan 2. yoklamanın (redaktör) variantı. Ayrı modeldə (ayrı kotada) işləyir.</div>
+          </div>
         </div>
       </div>
     </div>
@@ -1023,6 +1033,16 @@
           <option value="high">High</option>
         </select>
         <div>
+          <div class="settings-row-label">Redaktör düşüncə səviyyəsi (2. yoxlama)</div>
+          <div class="settings-row-sub">Hər bölüm sonu çalışan redaktörün variantı (gemini-3.1-flash-lite, ayrı kota). Low tövsiyə olunur</div>
+        </div>
+        <select id="aiProofThinkingSelect" onchange="saveAiApiKey()" style="width:100%;background:var(--bg-elevated);border:1px solid var(--line);border-radius:11px;padding:12px 14px;color:var(--text);font-size:13px;outline:none;">
+          <option value="low">Low</option>
+          <option value="minimal">Minimal</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+        <div>
           <div class="settings-row-label">Prompt (istəyə bağlı)</div>
           <div class="settings-row-sub">Yalnızca özəl API açarınız varsa istifadə edilir. Boş buraxsanız adminin təyin etdiyi qlobal prompt istifadə olunur</div>
         </div>
@@ -1171,6 +1191,10 @@ function sourceEnabled(name){
 let globalSubPrompt = '';
 let globalModel = '';
 let globalThinking = 'high';
+// Redaktör (2. yoklama) thinking — HERKES için, site_config "ai_model"
+// kaydının proofThinking alanında tutulur. Varsayılan 'low' (redaktörlük
+// daraltılmış iştir, high yavaşlatır + token yakar).
+let globalProofreadThinking = 'low';
 async function loadGlobalSubPrompt(){
   if(!sbReady()) return;
   try{
@@ -1186,6 +1210,9 @@ async function loadGlobalSubPrompt(){
       if(typeof data.data.thinking === 'string' && data.data.thinking.trim()){
         globalThinking = data.data.thinking.trim().toLowerCase();
       }
+      if(typeof data.data.proofThinking === 'string' && ['minimal','low','medium','high'].includes(data.data.proofThinking.trim().toLowerCase())){
+        globalProofreadThinking = data.data.proofThinking.trim().toLowerCase();
+      }
     }
   }catch(e){ console.warn('loadGlobalModel:', e); }
 }
@@ -1194,7 +1221,7 @@ async function saveGlobalSubPrompt(){
   if(!sbReady()) return false;
   try{
     await withTimeout(sb.from('site_config').upsert({ key:'sub_prompt', data:{ prompt: globalSubPrompt }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
-    await withTimeout(sb.from('site_config').upsert({ key:'ai_model', data:{ model: globalModel, thinking: globalThinking }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
+    await withTimeout(sb.from('site_config').upsert({ key:'ai_model', data:{ model: globalModel, thinking: globalThinking, proofThinking: globalProofreadThinking }, updated_at: new Date().toISOString() }, { onConflict:'key' }), 4000);
     return true;
   }catch(e){ console.warn('saveGlobalSubPrompt:', e); return false; }
 }
@@ -1205,7 +1232,7 @@ async function saveGlobalSubPrompt(){
 function getAdminCfgKey(){
   try{ return sessionStorage.getItem('anivax_admin_cfg_key') || ''; }catch(e){ return ''; }
 }
-async function saveAdminConfigRemote(prompt, model, thinking, sources){
+async function saveAdminConfigRemote(prompt, model, thinking, sources, proofThinking){
   let key = getAdminCfgKey();
   if(!key){
     try{ key = (window.prompt('Admin anahtarı (config kaydı için, sekme başına bir kez sorulur):', '') || '').trim(); }catch(e){ key = ''; }
@@ -1215,6 +1242,7 @@ async function saveAdminConfigRemote(prompt, model, thinking, sources){
   try{
     const body = { key, prompt, model, thinking };
     if(sources && typeof sources === 'object') body.sources = sources;
+    if(typeof proofThinking === 'string' && proofThinking) body.proofThinking = proofThinking;
     const resp = await fetch(SUPABASE_URL + '/functions/v1/admin-config', {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + SUPABASE_KEY },
@@ -1457,6 +1485,7 @@ let state = {
   ,subBg: 0.75         // altyazı arka plan opaklığı (0 = şeffaf)
   ,aiKey: ''           // Gemini API anahtarı — kullanıcı tarayıcısında saklanır
   ,aiThinking: 'minimal' // Gemini düşüncə səviyyəsi: minimal | low | medium | high
+  ,aiProofreadThinking: 'low' // Redaktör (2. yoxlama) düşüncə səviyyəsi — ayrı ayar
   ,aiPrompt: ''        // Özəl çeviri promptu (yalnız özəl API açarı ilə istifadə olunur)
 };
 
@@ -1846,6 +1875,7 @@ function saveSettings(){
     subBg: state.subBg || 0.75,
     aiKey: state.aiKey || '',
     aiThinking: state.aiThinking || 'minimal',
+    aiProofreadThinking: state.aiProofreadThinking || 'low',
     aiPrompt: state.aiPrompt || '',
     brokenSources: state.brokenSources || {},
     megavidMissing: state.megavidMissing || {}
@@ -1992,6 +2022,8 @@ function updateAiApiKeyUI(){
   if(input) input.value = state.aiKey || '';
   const sel = document.getElementById('aiThinkingSelect');
   if(sel) sel.value = state.aiThinking || 'minimal';
+  const psel = document.getElementById('aiProofThinkingSelect');
+  if(psel) psel.value = state.aiProofreadThinking || 'low';
   const prompt = document.getElementById('aiPromptInput');
   if(prompt) prompt.value = state.aiPrompt || '';
 }
@@ -2000,6 +2032,8 @@ function saveAiApiKey(){
   if(input) state.aiKey = (input.value || '').trim();
   const sel = document.getElementById('aiThinkingSelect');
   if(sel) state.aiThinking = sel.value || 'minimal';
+  const psel = document.getElementById('aiProofThinkingSelect');
+  if(psel && ['minimal','low','medium','high'].includes(psel.value)) state.aiProofreadThinking = psel.value;
   const prompt = document.getElementById('aiPromptInput');
   if(prompt) state.aiPrompt = (prompt.value || '').trim();
   saveSettings();
@@ -3506,6 +3540,8 @@ function renderAdminDashboard(){
   if(modelEl) modelEl.value = globalModel;
   const thinkEl = document.getElementById('adminThinkingSelect');
   if(thinkEl) thinkEl.value = globalThinking || 'high';
+  const proofThinkEl = document.getElementById('adminProofThinkingSelect');
+  if(proofThinkEl) proofThinkEl.value = globalProofreadThinking || 'low';
   onAdminModelInputChanged();
  }
 
@@ -3514,12 +3550,15 @@ function renderAdminDashboard(){
     const el = document.getElementById('adminSubPromptInput');
     const mel = document.getElementById('adminModelInput');
     const tel = document.getElementById('adminThinkingSelect');
+    const ptel = document.getElementById('adminProofThinkingSelect');
     const np = el ? el.value.trim() : '';
     const nm = mel ? mel.value.trim() : '';
     const nt = tel ? ((tel.value || 'high').trim().toLowerCase()) : 'high';
-    globalSubPrompt = np; globalModel = nm; globalThinking = nt;
+    const npt = ptel && ['minimal','low','medium','high'].includes((ptel.value || '').trim().toLowerCase())
+      ? (ptel.value || 'low').trim().toLowerCase() : 'low';
+    globalSubPrompt = np; globalModel = nm; globalThinking = nt; globalProofreadThinking = npt;
     (async ()=>{
-      const r = await saveAdminConfigRemote(np, nm, nt);
+      const r = await saveAdminConfigRemote(np, nm, nt, undefined, npt);
       let ok = r.ok;
       if(!ok && !r.needKey && !r.auth){
         // Fallback: Supabase oturumu açıksa direkt upsert çalışır.
@@ -3540,8 +3579,9 @@ function renderAdminDashboard(){
    globalSubPrompt = '';
    globalModel = '';
    globalThinking = 'high';
+   globalProofreadThinking = 'low';
    (async ()=>{
-     const r = await saveAdminConfigRemote('', '', 'high');
+     const r = await saveAdminConfigRemote('', '', 'high', undefined, 'low');
      const ok = r.ok ? true : await saveGlobalSubPrompt();
      const el = document.getElementById('adminSubPromptInput');
      if(el) el.value = '';
@@ -3549,6 +3589,8 @@ function renderAdminDashboard(){
      if(mel) mel.value = '';
      const tel = document.getElementById('adminThinkingSelect');
      if(tel) tel.value = 'high';
+     const ptel = document.getElementById('adminProofThinkingSelect');
+     if(ptel) ptel.value = 'low';
      onAdminModelInputChanged();
      showToast(ok
        ? (state.lang==='en' ? 'Global AI model + variant + prompt reset to default' : (state.lang==='tr' ? 'Global AI model + variant + prompt varsayılana döndü' : 'Qlobal AI model + variant + prompt standarta qayıtdı'))
@@ -6492,6 +6534,12 @@ async function translateSubtitlesToAz(){
   // havuz admin panelden belirlenen global variant (globalThinking) kullanır.
   const thinkingLevel = ['minimal','low','medium','high'].includes(state.aiThinking) ? state.aiThinking : 'minimal';
   const effectiveLevel = apiKey ? thinkingLevel : (globalThinking || 'high');
+  // Redaktör (2. yoklama) thinking'i AYRI ayardan gelir — admin panelindeki
+  // globalProofreadThinking (paylaşımlı havuz) ya da kullanıcının
+  // aiProofThinkingSelect seçimi (özel key). Varsayılan 'low'. Model SABİT:
+  // PROOFREAD_MODEL (ayrı kota havuzu).
+  const proofThinkingRaw = apiKey ? (state.aiProofreadThinking || 'low') : (globalProofreadThinking || 'low');
+  const proofreadLevel = ['minimal','low','medium','high'].includes(String(proofThinkingRaw).toLowerCase()) ? String(proofThinkingRaw).toLowerCase() : 'low';
   // Çift numara: "42. metin [42]" — model birleştirme/bölme yaparsa sondaki
   // [N] işaretleri sırayı ele verir, kayma local'de yakalanır (sıfır ek istek).
   const numbered = dualNumber(original);
@@ -6563,6 +6611,11 @@ async function translateSubtitlesToAz(){
     const needFullRetry = !vFinal.ok;
     const shiftDetected = vFinal.shift;
     let repairAll = false;
+    // qualityPassed: redaktör kalite geçişi bu bölüm için yapıldı mı? Her
+    // bölümde EN FAZLA 1 redaktör isteği gider (her API'den 2 istek kuralı:
+    // 1 ana çeviri + 1 redaktör). Repair yolunda redaktör çalıştıysa alttaki
+    // her-zaman geçişi atlanır; çalışmadıysa altta mutlaka çalışır.
+    let qualityPassed = false;
     if(needFullRetry){
       try{
         // Kayma tespit edildiyse proofread ATLAMIR — proofread sırayı koruduğu
@@ -6573,12 +6626,13 @@ async function translateSubtitlesToAz(){
           // tutmazsa throw → stream sonucu korunur, alta eski yol denenir.
           const drafts = outLines.map(t => (typeof t === 'string' && t.trim()) ? t : '');
           try{
-            const rep = await proofreadChunkToAz(apiKey, original, drafts, effectiveLevel, aiModel);
+            const rep = await proofreadChunkToAz(apiKey, original, drafts, proofreadLevel, PROOFREAD_MODEL);
             if(Array.isArray(rep) && rep.length === cues.length){
               rep.forEach((line, i)=>{
                 if(line && line.trim()) outLines[i] = line.trim();
               });
               repairAll = true;
+              qualityPassed = true;
             }
           }catch(pre){ console.error('[ai-sub] proofread failed, falling back to re-translate:', pre && pre.message ? pre.message : pre); }
         }
@@ -6615,6 +6669,25 @@ async function translateSubtitlesToAz(){
           if(idx != null && line && line.trim()) outLines[idx] = line;
         });
       }
+    }
+
+    // HER-ZAMAN redaktör geçişi: stream düzgün geldiyse (veya shift sonrası
+    // sıfırdan çeviri yapıldıysa) redaktör henüz çalışmadı → şimdi 1 kez
+    // çalışır. Taslak zaten ekranda; redaktör bitince düzeltilmişi yerine
+    // geçer. Başarısız olursa taslak korunur (altyazı asla kaybolmaz).
+    // Cache'e de redaktörlü hali yazılır (alttaki finalize/cache aynen).
+    if(!qualityPassed){
+      try{
+        const finalDrafts = outLines.map(t => (typeof t === 'string' && t.trim()) ? t : '');
+        const repQ = await proofreadChunkToAz(apiKey, original, finalDrafts, proofreadLevel, PROOFREAD_MODEL);
+        if(Array.isArray(repQ) && repQ.length === cues.length){
+          repQ.forEach((line, i)=>{
+            if(line && line.trim()) outLines[i] = line.trim();
+          });
+          qualityPassed = true;
+          render();
+        }
+      }catch(qe){ console.error('[ai-sub] always-proofread failed, keeping draft:', qe && qe.message ? qe.message : qe); }
     }
 
     // Kesinleştir: son blob'u kalıcı yap ve track'te göster.
@@ -6672,6 +6745,10 @@ async function translateSubtitlesToAz(){
 // Gemini doğrudan API çağrısı (worker proxy yok) — model dinamik (admin/global).
 // Varsayılan model, admin panelden site_config "ai_model" ile HERKES için değiştirilebilir.
 const GEMINI_MODEL = 'gemini-3.5-flash-lite';
+// Redaktör (2. yoklama) modeli — SABİT, admin panelden değiştirilemez.
+// Ayrı model = ayrı kota havuzu (limitler model başına tutulur): ana çeviri
+// 3.5-flash-lite havuzundan, redaktör 3.1-flash-lite havuzundan yer.
+const PROOFREAD_MODEL = 'gemini-3.1-flash-lite';
 function geminiBase(model){
   const m = (model && model.trim()) || GEMINI_MODEL;
   return 'https://generativelanguage.googleapis.com/v1beta/models/' + m;
@@ -6721,8 +6798,13 @@ MƏZMUN VƏ ADLAR QAYDALARI
 - Söyüş və arqo sözlər olduğu kimi, gücü saxlanaraq verilir — yumşaltma, şişirtmə, senzura yoxdur.
 - Yumor, sarkazm, qorxu, qəzəb kimi ton olduğu kimi qalır.
 
-SON YOXLAMA
-Göndərmədən əvvəl sürətlə yoxla: sətir sayı və sırası girişlə tam üst-üstə düşür (heç bir sətir birləşdirilməyib, bölünməyib, buraxılmayıb), mənbədə olmayan söz/hərf əlavə edilməyib, yarımçıq söz/cümlə yoxdur, yad dildən qalan söz yoxdur, JSON etibarlıdır (dırnaq və əks xətt escape olunub). Uzun təhlilə ehtiyac yoxdur — sürətli göz gəzdirmə kifayətdir.
+SON YOXLAMA — HƏR SƏTRİ GÖNDƏRMƏDƏN ÖNCƏ TƏK-TƏK YOXLA
+Hər çıxış sətrini bitirən kimi, göndərmədən əvvəl o sətri SOURCE ilə yan-yana qoyub yoxla — "sürətli göz gəzdirmə" YOX, sətir-sətir doğrulama:
+1. MƏNA: sətirdə mənasız, yarımçıq, uydurma söz yoxdur; hər söz SOURCE-dakı qarşılığına uyğundur.
+2. YAZIM/HƏRF: hər sözün yazılışı düzgündür — artıq/düşən/yeridəyişmiş hərf yoxdur; türk hərf və sözü qarışmayıb ("yapmaq", "şimdi", "hiç", "aynı", "ş/ç/ı/ö/ü" yox); Azərbaycan "ə/ğ/q/x" hərfləri yerindədir.
+3. CÜMLƏ UYĞUNLUĞU: söz seçimi və şəkilçi cümləyə uyğundur, cümlə qrammatik cəhətdən düzgün və təbii səslənir.
+4. SAY/SIRA/JSON: sətir sayı və sırası girişlə tam üst-üstə düşür (birləşmə/bölünmə/buraxılma yoxdur), yad dildən qalan söz yoxdur, JSON etibarlıdır (dırnaq və əks xətt escape olunub).
+Qayda pozan sətri dərhal düzəldib elə göndər — pozulmuş sətir çıxdıda qalmamalıdır.
 
 Return ONLY a plain JSON array starting with "[" like ["translation 1","translation 2",...] and nothing else.`;
 
@@ -6733,17 +6815,24 @@ const USE_PROOFREAD_REPAIR = true;
 
 // Proofread promptu: girdi numaralı SOURCE/DRAFT çiftleridir. Model taslağı
 // redakte eder — sıfırdan çevirmez. Kelime seçimi/deyim hatalarını SOURCE'a
-// bakarak düzeltir, düzgün satırlara dokunmaz, boş taslağı çevirir.
-const PROOFREAD_PROMPT = `Sənə nömrələnmiş cütlər göndəriləcək. Hər bənddə SOURCE (orijinal ingilis sətir) və DRAFT (onun Azərbaycan dilinə taslak tərcüməsi, sonda [N] işarəsi ilə) var. Sənin işin SIFIRDAN tərcümə deyil, taslağı REDAKTƏ etməkdir. Nəticəni sadə bir JSON array kimi qaytar — başqa heç nə olmadan. Hər çıxış elementinin sonunda girişdəki [N] işarəsini OLDUĞU KİMİ saxla.
+// bakarak düzeltir, düzgün satırlara dokunmaz, boş taslağı çevirir. Yazım,
+// hərf, mənasız söz və cümlə uyğunluğu yoxlaması redaktorun əsas işidir.
+const PROOFREAD_PROMPT = `Sən peşəkar REDAKTORSAN. Sənə nömrələnmiş cütlər göndəriləcək. Hər bənddə SOURCE (orijinal ingilis sətir) və DRAFT (onun Azərbaycan dilinə taslak tərcüməsi, sonda [N] işarəsi ilə) var. Sənin işin SIFIRDAN tərcümə deyil, taslağı REDAKTƏ etməkdir: hər DRAFT-ı SOURCE ilə yan-yana qoyub yoxla, xətası varsa düzəlt, yoxdursa OLDUĞU KİMİ saxla. Nəticəni sadə bir JSON array kimi qaytar — başqa heç nə olmadan. Hər çıxış elementinin sonunda girişdəki [N] işarəsini OLDUĞU KİMİ saxla.
+
+YOXLANILACAQ XƏTALAR (hər bənddə bu sırayla bax):
+1. MƏNASIZ/YARIMÇIQ SÖZ: DRAFT-da mənası olmayan, uydurma, yarımçıq qalmış və ya SOURCE-la əlaqəsiz söz varsa, SOURCE-a əsaslanaraq doğrusunu yaz.
+2. YAZIM VƏ HƏRF: hər sözün yazılışını hərf-hərf yoxla — artıq, düşən və ya yeri dəyişmiş hərf varsa düzəlt. Türk hərf/sözü qarışmayıb: "yapmaq" yox → "etmək", "şimdi" yox → "indi", "hiç" yox → "heç", "aynı" yox → "eyni", "ş/ç/ı/ö/ü" yox; Azərbaycan "ə/ğ/q/x" hərfləri yerində olmalıdır.
+3. CÜMLƏ UYĞUNLUĞU: söz seçimi və şəkilçi cümləyə uyğun olmalı, cümlə qrammatik cəhətdən düzgün və təbii (Bakı danışıq dili) səslənməlidir. Hərfi tərcümə olunmuş deyim/ifadə varsa, mənanı qoruyaraq təbii qarşılığı ilə əvəz et.
+4. ADLAR VƏ ÜSLUB: personaj/xüsusi adlar orijinal yazılışla saxlanılır; müraciət "Sən" olur; söyüş/arqo gücü saxlanılır; \\N, <i>, {\\i1} işarələri yerində qalır.
 
 QAYDALAR
 - Çıxış array-inin element sayı giriş bənd sayına DƏQİQ bərabər olmalı, sıra dəyişməməlidir.
-- DRAFT düzgündürsə, onu OLDUĞU KİMİ saxla — "daha yaxşı" deyə yenidən yazma.
-- DRAFT-də mənasız cümlə, yanlış söz seçimi, hərfi tərcümə olunmuş deyim/ifadə, artıq və ya düşən hərf varsa, SOURCE-a əsaslanaraq DÜZƏLT.
-- DRAFT boşdursa, SOURCE-u normal tərcümə et.
+- DRAFT yuxarıdakı 4 yoxlamadan KEÇİRSƏ, onu OLDUĞU KİMİ saxla — "daha yaxşı" deyə yenidən yazma, söz dəyişdirmə.
+- DRAFT boşdursa, SOURCE-u normal tərcümə et (yuxarıdakı qaydalara uyğun).
 - QADAĞANDIR: iki bəndi bir elementdə birləşdirmək, bir bəndi bölmək, bənd buraxmaq.
-- \\N, <i>, {\\i1} kimi işarələr yerində saxlanılır; " adam adları orijinal yazılışla saxlanılır; müraciət "Sən" olur; türk sözləri ("yapmaq", "şimdi", "hiç", "aynı") işlədilmir — saf Azərbaycan dili.
 - Bunlar JSON string daxilində olacağı üçün: əks xətt (\\) işarəsini \\\\, dırnaq (") işarəsini \\" kimi mütləq escape et — əks halda çıxış JSON-u sınar.
+
+SON YOXLAMA: göndərmədən əvvəl hər element üçün yoxla — [N] işarəsi yerində, say/sıra düzgün, mənasız söz yoxdur, yazım/hərf xətası yoxdur, cümlə düzgündür, JSON etibarlıdır.
 
 Return ONLY a plain JSON array starting with "[" like ["fixed 1","fixed 2",...] and nothing else.`;
 
