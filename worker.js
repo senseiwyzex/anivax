@@ -686,6 +686,150 @@ const ANIKOTO_SITE = "https://anikototv.to";
 const ANIKOTO_API = "https://anikotoapi.site";
 const MEGAPLAY_BASE = "https://megaplay.buzz";
 
+// ---- /archive-source ------------------------------------------------------
+// archive.org'da ham (RAW, gömülüsüz) bölüm MP4'ü + ayrı altyazı dosyası bulur.
+// Gets: /archive-source?title=<title>&ep=<n>
+//  -> { status:"ok", source:"<mp4>", direct:true, tracks:[{file,label,lang}], meta }
+// Zincir: advancedsearch (1) → metadata (1-3) → seçim. Tarayıcı MP4'ü
+// CORS-açık archive.org'dan DİREKT çeker (ACAO:*, range destekli) — worker'a
+// segment yükü YOK, bölüm başı maliyet 1-3 çözümleme isteği. Altyazı yoksa
+// istemci AI çeviriyi ham videonun üstüne koyar (ayrı katman).
+const ARCHIVE_BAD_WORDS = ["reaction", "review", "amv", "pv", "trailer", "teaser", "opening", "ending", "op ", "ed ", " ost", "cover", "clip", "moment", "top 10", "vs ", "amv)", "(amv", "mashup", "nightcore"];
+// Gömülü (hardsub) altyazılı gruplar: video ham değildir — en sona atılır,
+// meta.subBurned ile işaretlenir (istemci ham olanı tercih eder).
+const ARCHIVE_HARDSUB_GROUPS = ["pahe", "subsplease", "horriblesubs"];
+function archiveEpMatch(text, ep) {
+  const t = " " + String(text || "").toLowerCase().replace(/[_\.\-]+/g, " ") + " ";
+  const n = String(ep);
+  const nz = n.length === 1 ? "0" + n : n;
+  const pats = [
+    new RegExp("(episode|ep|e)\\s*0?" + n + "\\b"),
+    new RegExp("[\\s\\[\\(\\-]0?" + nz + "[\\s\\]\\)\\-\\.]"),
+    new RegExp("\\bs" + "\\d{1,2}" + "e0?" + n + "\\b"),
+  ];
+  return pats.some((rx) => rx.test(t));
+}
+function archiveScore(item, ep) {
+  const title = String(item.title || "");
+  const id = String(item.identifier || "");
+  const blob = (title + " " + id).toLowerCase();
+  if (ARCHIVE_BAD_WORDS.some((w) => blob.includes(w))) return -1000;
+  if (!archiveEpMatch(title + " " + id, ep)) return -1000;
+  let s = 0;
+  if (id.includes("erai")) s += 50;              // ham + multisub garantisi
+  if (/1080p/i.test(blob)) s += 20;
+  else if (/720p/i.test(blob)) s += 10;
+  else if (/480p/i.test(blob)) s += 5;
+  if (/multi[\s_-]?sub/i.test(blob)) s += 15;
+  if (/web[\s_-]?dl|bluray|bd /i.test(blob)) s += 10;
+  const burned = ARCHIVE_HARDSUB_GROUPS.find((g) => blob.includes(g)) || null;
+  if (burned) s -= 40; // gömülü altyazı: ham değil, ancak hiç yoksa oynar
+  return { score: s, burned };
+}
+async function handleArchiveSource(request, url) {
+  const title = url.searchParams.get("title");
+  const epRaw = url.searchParams.get("ep") || "1";
+  const ep = parseInt(epRaw, 10) || 1;
+  if (!title) {
+    return new Response(
+      JSON.stringify({ status: "error", message: "Missing title parameter" }),
+      { status: 400, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  }
+  const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const titleNorm = norm(title);
+  if (!titleNorm) {
+    return new Response(
+      JSON.stringify({ status: "error", message: "Empty title", retryable: false }),
+      { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  }
+  try {
+    // 1) archive.org gelişmiş arama (anahtarsız, herkese açık).
+    const q = "title:(" + titleNorm + ") AND mediatype:movies";
+    const searchRes = await fetchT(
+      "https://archive.org/advancedsearch.php?q=" + encodeURIComponent(q) +
+      "&fl[]=identifier,title,date&rows=40&output=json",
+      { accept: "application/json, */*" }, 15000);
+    const searchJson = await searchRes.json().catch(() => null);
+    const docs = (searchJson && searchJson.response && Array.isArray(searchJson.response.docs))
+      ? searchJson.response.docs : [];
+    if (!docs.length) {
+      return new Response(
+        JSON.stringify({ status: "error", message: "Nothing on archive.org", retryable: false }),
+        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+    // Başlık benzerliği filtresi: arşiv araması gevşek eşleşir; seri adının
+    // ilk iki anlamlı kelimesi adayda geçmeli (yanlış seriyi elemek için).
+    const keywords = titleNorm.split(" ").filter((w) => w.length > 2).slice(0, 3);
+    const scored = [];
+    for (const d of docs) {
+      const blob = norm((d.title || "") + " " + (d.identifier || ""));
+      if (!keywords.every((k) => blob.includes(k))) continue;
+      const r = archiveScore(d, ep);
+      if (r.score > -1000) scored.push({ d, s: r.score, burned: r.burned });
+    }
+    scored.sort((a, b) => b.s - a.s);
+    if (!scored.length) {
+      return new Response(
+        JSON.stringify({ status: "error", message: "No matching episode on archive.org", retryable: false }),
+        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+    // 2) En iyi 3 adayın metadata'sına bak: en büyük MP4 + EN srt öncelikli.
+    for (const { d, burned } of scored.slice(0, 3)) {
+      try {
+        const metaRes = await fetchT("https://archive.org/metadata/" + encodeURIComponent(d.identifier),
+          { accept: "application/json, */*" }, 15000);
+        const meta = await metaRes.json().catch(() => null);
+        const files = (meta && Array.isArray(meta.files)) ? meta.files : [];
+        const mp4s = files
+          .filter((f) => f && typeof f.name === "string" && /\.mp4$/i.test(f.name) &&
+            !/sample|preview|trailer/i.test(f.name) && Number(f.size || 0) > 20 * 1024 * 1024)
+          .sort((a, b) => Number(b.size || 0) - Number(a.size || 0));
+        if (!mp4s.length) continue;
+        // En büyük MP4'ü al (bölümün kendisi; küçükler klip/parça olur).
+        const mp4 = mp4s[0];
+        const subs = files.filter((f) => f && typeof f.name === "string" && /\.(srt|vtt|ass)$/i.test(f.name));
+        const engFirst = subs.sort((a, b) => {
+          const ae = /eng|english/i.test(a.name) ? 0 : 1;
+          const be = /eng|english/i.test(b.name) ? 0 : 1;
+          return ae - be;
+        });
+        const dl = "https://archive.org/download/" + encodeURIComponent(d.identifier) + "/";
+        const tracks = engFirst.slice(0, 4).map((f) => {
+          const lang = /eng|english/i.test(f.name) ? "en" : (/jpn|japan/i.test(f.name) ? "jp" : "");
+          return { file: dl + encodeURIComponent(f.name), label: f.name.replace(/\.[^.]+$/, "").slice(0, 60), lang };
+        });
+        return new Response(JSON.stringify({
+          status: "ok",
+          source: dl + encodeURIComponent(mp4.name),
+          direct: true, // tarayıcı CORS-açık archive.org'dan direkt çeker
+          tracks,
+          meta: {
+            identifier: d.identifier,
+            title: d.title || "",
+            episode: ep,
+            sourceName: "Archive.org",
+            size: Number(mp4.size || 0),
+            subBurned: burned || null, // gömülü altyazılı grupsa adı (ham değil)
+          },
+        }), { headers: corsHeaders({ "Content-Type": "application/json", "Cache-Control": "public, max-age=3600" }) });
+      } catch (e) { /* sıradaki aday */ }
+    }
+    return new Response(
+      JSON.stringify({ status: "error", message: "No playable file on archive.org", retryable: true }),
+      { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  } catch (e) {
+    return new Response(
+      JSON.stringify({ status: "error", message: e.message, retryable: true }),
+      { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+    );
+  }
+}
+
 // ---- MegaPlay `enc` çözümü ------------------------------------------------
 // getSourcesNew artık `{ sources:{file} }` yerine `{ server, enc }` dönüyor;
 // `enc` = base64url(AES-256-CBC(utf8JSON, key, iv)), plaintext `{"file":"..."}`.
@@ -1048,6 +1192,9 @@ export default {
     }
     if (url.pathname === "/megapay-source") {
       return await handleMegapaySource(request, url);
+    }
+    if (url.pathname === "/archive-source") {
+      return await handleArchiveSource(request, url);
     }
     if (url.pathname === "/proxy") {
       return await handleProxy(request, url);

@@ -2689,6 +2689,7 @@ const TRANSLATE_ENDPOINT = MEGAVID_WORKER_BASE + '/translate';
 // Megavid'de ~325 istek/bölüm olduğundan Anineko tercih edilir.
 const ANINEKO_SOURCE_PATH = '/anineko-source';
 const MEGAPAY_SOURCE_PATH = '/megapay-source';
+const ARCHIVE_SOURCE_PATH = '/archive-source';
 
 let currentMegavidUrl = null;      // resolved m3u8 for the active episode
 let megavidSubtitleUrl = null;     // .vtt track routed through the worker
@@ -3185,6 +3186,67 @@ function loadMegapaySourceIfNeeded(frame, anime, episodeNum){
     return false;
   })().finally(()=>{ megapayLoadPromise = null; });
   return megapayLoadPromise;
+}
+
+// ================= ARCHIVE.ORG SOURCING =================
+// Ham (RAW, gömülüsüz) bölüm MP4'ü + ayrı altyazı: worker /archive-source
+// tek zincirde çözer (arama 1 + metadata 1-3 istek). Tarayıcı MP4'ü CORS-açık
+// archive.org'dan DİREKT çeker — worker'a bölüm başına 1-3 istek, oynatma
+// bedava. EN altyazı varsa ilk o takılır; yoksa ham video oynar, AI katmanı
+// ayrıca üstüne biner (metin hattı EN parça bekler — altyazısız ham videoda
+// AI çalışmaz, bilinen sınır).
+// Sıra: MegaPlay (altyazılı+hızlı) → Archive.org (ham+bedava) → Anineko.
+let archiveLoadPromise = null;
+let archiveLastStatus = 'ok'; // 'ok' | 'missing' | 'transient'
+
+async function archiveResolveSource(anime, episodeNum){
+  const titles = [];
+  if(anime.title && anime.title.english) titles.push(anime.title.english);
+  if(anime.title && anime.title.romaji) titles.push(anime.title.romaji);
+  if(anime.title && anime.title.native) titles.push(anime.title.native);
+  const qs = `${ARCHIVE_SOURCE_PATH}?ep=${episodeNum}`;
+  for(const t of titles){
+    if(!t) continue;
+    try{
+      const res = await fetch(`${MEGAVID_WORKER_BASE}${qs}&title=${encodeURIComponent(t)}`);
+      const data = await res.json().catch(()=>null);
+      if(res.ok && data && data.status === 'ok' && data.source) return data;
+      if(res.ok && data && data.status === 'error' && data.retryable === false) archiveLastStatus = 'missing';
+    }catch(e){ /* try next title */ }
+  }
+  return null;
+}
+
+function loadArchiveSourceIfNeeded(frame, anime, episodeNum){
+  if(archiveLoadPromise) return archiveLoadPromise;
+  archiveLoadPromise = (async ()=>{
+    const src = anime && anime.episodeSources ? anime.episodeSources[episodeNum] : null;
+    const hasTorrent = src && Array.isArray(src.torrents) && src.torrents.length > 0;
+    const hasVideo = !!(src && src.video);
+    if(hasTorrent || hasVideo) return false;
+
+    const data = await archiveResolveSource(anime, episodeNum);
+    if(!data || !data.source){ if(archiveLastStatus !== 'missing') archiveLastStatus = 'transient'; return false; }
+    if(currentEpisodeNum !== episodeNum) return false;
+
+    const tracks = Array.isArray(data.tracks) ? data.tracks : [];
+    const enTrack = tracks.find(t => t && (t.lang === 'en' || /eng/i.test(t.label || ''))) || tracks[0] || null;
+    try{
+      removeVideoElements();
+      currentSourceLabel = 'archiveorg';
+      mountDirectPlayer(frame, data.source, enTrack ? enTrack.file : null);
+      const r = await waitForPlayback(episodeNum, { timeoutMs: 20000 });
+      if(r === 'ok'){
+        archiveLastStatus = 'ok';
+        const burned = data.meta && data.meta.subBurned;
+        showPlayerToast(burned ? ('Archive.org (gömülü ' + burned + ')') : 'Archive.org (ham)');
+        return true;
+      }
+    }catch(e){ /* fallthrough */ }
+    archiveLastStatus = 'transient';
+    return false;
+  })().finally(()=>{ archiveLoadPromise = null; });
+  return archiveLoadPromise;
 }
 
 function showPlayerToast(msg){
@@ -5384,21 +5446,25 @@ function loadEpisodeIntoPlayer(episodeNum){
         });
       } else {
         // Otomatik: MegaPlay önce denenir (tek istek/bölüm, CORS açık, EN
-        // softsub kendi içinde) → başarısızsa Anineko aileleri → en son Megavid.
+        // softsub kendi içinde) → olmazsa Archive.org ham MP4 (1-3 istek,
+        // direkt oynatma, gömülüsüz) → başarısızsa Anineko aileleri → en son Megavid.
         loadMegapaySourceIfNeeded(frame, currentDetail, episodeNum).then(didMegapay => {
           if(didMegapay || currentEpisodeNum !== episodeNum) return;
-          // Megavid varlığını anineko çözümlemesiyle paralel öğren →
-          // yavaş kaynakta karar (sabret vs Megavid'e geç) saniyeler içinde verilir.
-          const megavidInfoP = megavidAvailability(currentDetail, episodeNum).catch(()=>({ available:false, missing:false, data:null }));
-          loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, megavidInfoP).then(didPlay => {
-            if(!didPlay && currentEpisodeNum === episodeNum){
-              loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
-                if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
-                  if(megavidLastStatus === 'missing' || megavidLastStatus === 'disabled') showPlayerUnavailable();
-                  else mountMegavidIframe(frame, currentDetail, episodeNum);
-                }
-              });
-            }
+          loadArchiveSourceIfNeeded(frame, currentDetail, episodeNum).then(didArchive => {
+            if(didArchive || currentEpisodeNum !== episodeNum) return;
+            // Megavid varlığını anineko çözümlemesiyle paralel öğren →
+            // yavaş kaynakta karar (sabret vs Megavid'e geç) saniyeler içinde verilir.
+            const megavidInfoP = megavidAvailability(currentDetail, episodeNum).catch(()=>({ available:false, missing:false, data:null }));
+            loadAninekoSourceIfNeeded(frame, currentDetail, episodeNum, megavidInfoP).then(didPlay => {
+              if(!didPlay && currentEpisodeNum === episodeNum){
+                loadMegavidSourceIfNeeded(frame, currentDetail, episodeNum).then(didMegavid => {
+                  if(!didMegavid && currentEpisodeNum === episodeNum && !document.getElementById('megavidIframe')){
+                    if(megavidLastStatus === 'missing' || megavidLastStatus === 'disabled') showPlayerUnavailable();
+                    else mountMegavidIframe(frame, currentDetail, episodeNum);
+                  }
+                });
+              }
+            });
           });
         });
       }
