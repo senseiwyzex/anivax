@@ -160,6 +160,7 @@ async function handleProxy(request, url) {
     "mikora.top",
     "norami.top",
     "shiora.top",
+    "shiora.site",
     // MegaPlay'in bazı bölümleri segmentleri PNG-maskeli TS olarak ByteDance
     // CDN'inden (p16/p19-ad-site-sign-sg.tiktokcdn.com) sunar — Megavid'in
     // maskesinden farksız; stripPngMask yolu üzerinden geçer (isMegapayStream
@@ -190,7 +191,7 @@ async function handleProxy(request, url) {
   // ncdn.imgnex.top, bb.akirax.buzz, fetch.nexabloom.top ...) — hepsini
   // tek tek izinlemek kırılgan. Ortak imza: /anime/{32hex}/{32hex}/… veya
   // /{32hex}/{32hex}/… (master, varyant, segment, altyazı hepsi bu ağaçta).
-  const isMegapayStream = /^(\/anime\/)?[0-9a-f]{32}\/[0-9a-f]{32}\//i.test(targetUrl.pathname);
+  const isMegapayStream = /^\/(anime\/)?[0-9a-f]{32}\/[0-9a-f]{32}\//i.test(targetUrl.pathname);
   const hostAllowed =
     ALLOWED_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
     isOtakuvidStream ||
@@ -685,6 +686,87 @@ const ANIKOTO_SITE = "https://anikototv.to";
 const ANIKOTO_API = "https://anikotoapi.site";
 const MEGAPLAY_BASE = "https://megaplay.buzz";
 
+// ---- MegaPlay `enc` çözümü ------------------------------------------------
+// getSourcesNew artık `{ sources:{file} }` yerine `{ server, enc }` dönüyor;
+// `enc` = base64url(AES-256-CBC(utf8JSON, key, iv)), plaintext `{"file":"..."}`.
+// Key/IV newclient.min.js içinden kazınır (sürüm değişimine dayanıklı),
+// kazıma başarısızsa sabit fallback kullanılır.
+const MP_KEY_FALLBACK = "i?LMTAx0Q6,:}50U";
+const MP_IV_FALLBACK = "W0;27ToaUpl_P%'c";
+const MP_FIX_V = 5; // deploy-doğrulama işareti (stage'de görünür)
+let mpKeyCache = null; // { key, iv, at }
+// NOT: const-arrow + benzersiz ad (wrangler/esbuild paketinde `async function
+// getMegapayKeys` bildirimi düşüyordu — typeof undefined; const-arrow görünür).
+const mpFetchKeys = async () => {
+  const now = Date.now();
+  if (mpKeyCache && now - mpKeyCache.at < 3600_000) return mpKeyCache;
+  try {
+    const r = await fetchT(`${MEGAPLAY_BASE}/lib/newclient.min.js`, { accept: "text/javascript, */*" }, 10000);
+    const js = await r.text();
+    // `var P="<key>",w="<iv>"` kalıbı dosyada birden çok geçebilir; doğru
+    // olan, devamında `/segment/` geçen ve içinde `/` barındırmayanıdır
+    // (şifreli segment URL'leri + düz anahtar metni). Düz string araması —
+    // regex kaçış tuzağı yok.
+    const rx = /var P="([^"]{8,80})",w="([^"]{8,80})"/g;
+    let m = null, best = null, plain = null;
+    while ((m = rx.exec(js))) {
+      if (m[1].indexOf("/") !== -1 || m[2].indexOf("/") !== -1) continue;
+      if (!plain) plain = m;
+      if (js.slice(m.index, m.index + 2000).indexOf("/segment/") !== -1) { best = m; break; }
+    }
+    best = best || plain;
+    if (best) {
+      mpKeyCache = { key: best[1], iv: best[2], at: now };
+      return mpKeyCache;
+    }
+  } catch (e) { /* fallback'a düş */ }
+  mpKeyCache = { key: MP_KEY_FALLBACK, iv: MP_IV_FALLBACK, at: now };
+  return mpKeyCache;
+}
+function mpB64urlToBytes(s) {
+  let b64 = String(s).replace(/-/g, "+").replace(/_/g, "/");
+  const pad = b64.length % 4;
+  if (pad) b64 += "====".slice(pad);
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function decryptMegapayEnc(enc, keyStr, ivStr) {
+  const kb = new Uint8Array(32);
+  const ke = new TextEncoder().encode(keyStr || "");
+  kb.set(ke.subarray(0, Math.min(32, ke.length)));
+  const iv = new TextEncoder().encode(ivStr || "");
+  const ck = await crypto.subtle.importKey("raw", kb, { name: "AES-CBC" }, false, ["decrypt"]);
+  const pt = await crypto.subtle.decrypt({ name: "AES-CBC", iv }, ck, mpB64urlToBytes(enc));
+  return new TextDecoder().decode(pt);
+}
+// getSourcesNew yanıtından oynatılabilir m3u8 çıkar: eski `{sources:{file}}`
+// ya da yeni `{enc}` (şifreli) formatı. Bulunamazsa/çözülemezse throw
+// (çağrıcı stage ile yakalar — uzaktan teşhis için).
+async function extractMegapayFile(sourcesJson) {
+  if (!sourcesJson) throw new Error("no-json");
+  if (sourcesJson.sources && typeof sourcesJson.sources.file === "string") {
+    return sourcesJson.sources.file;
+  }
+  if (typeof sourcesJson.enc === "string" && sourcesJson.enc) {
+    const { key, iv } = await mpFetchKeys();
+    let plain;
+    try {
+      plain = await decryptMegapayEnc(sourcesJson.enc, key, iv);
+    } catch (e) {
+      throw new Error("decrypt-fail:" + ((e && e.message) || "?").slice(0, 40));
+    }
+    try {
+      const obj = JSON.parse(plain);
+      if (obj && typeof obj.file === "string") return obj.file;
+    } catch (e) { /* düz URL olabilir */ }
+    if (/^https?:\/\//i.test(plain.trim())) return plain.trim();
+    throw new Error("enc-no-url");
+  }
+  throw new Error("no-enc-field");
+}
+
 // Anikoto arama sayfasındaki ilk bölüm bağlantılarını (title → slug) çıkarır.
 // Arama sonuçları `<a class="name d-title" href=".../watch/{slug}/ep-{n}" ...>`.
 function parseAnikotoSearchResults(html) {
@@ -795,22 +877,47 @@ async function handleMegapaySource(request, url) {
     const mediaId = mediaMatch[1];
 
     // 5) media id → m3u8 + altyazı track'leri. "AJAX only" koruması X-Requested-With
-    //    ile aşılır; yanıtın söylediği source direkt (CORS açık) oynatılabilir.
-    const sourcesRes = await fetchT(`${MEGAPLAY_BASE}/stream/getSourcesNew?id=${encodeURIComponent(mediaId)}`, {
-      referer: `${MEGAPLAY_BASE}/stream/s-2/${encodeURIComponent(embedId)}/sub`,
-      headers: { "X-Requested-With": "XMLHttpRequest" },
-      accept: "application/json, text/plain, */*",
-    }, 10000);
-    const sourcesJson = await sourcesRes.json().catch(() => null);
-    const playable = sourcesJson && sourcesJson.sources && typeof sourcesJson.sources.file === "string"
-      ? sourcesJson.sources.file
-      : null;
+    //    ile aşılır. getSourcesNew iki format dönebilir: eski `{sources:{file}}`
+    //    ya da yeni `{server, enc}` (şifreli — extractMegapayFile çözer).
+    //    `s=tcdn` istenir: mikora CDN'e düşer, /proxy + megaplay referer ile
+    //    oynar (doğrudan IP-engelli CDN'lere takılmamak için). Olmazsa
+    //    parametresiz denenir.
+    async function fetchSourcesJson(sParam) {
+      const q = `${MEGAPLAY_BASE}/stream/getSourcesNew?id=${encodeURIComponent(mediaId)}` + (sParam ? `&s=${encodeURIComponent(sParam)}` : "");
+      const res = await fetchT(q, {
+        referer: `${MEGAPLAY_BASE}/stream/s-2/${encodeURIComponent(embedId)}/sub`,
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+        accept: "application/json, text/plain, */*",
+      }, 10000);
+      return res.json().catch(() => null);
+    }
+    let sourcesJson = await fetchSourcesJson("tcdn").catch(() => null);
+    let stage = "v" + MP_FIX_V + ":" + (sourcesJson ? "tcdn-json" : "tcdn-fetch-fail");
+    let playable = null;
+    try {
+      playable = await extractMegapayFile(sourcesJson);
+      stage += "/extract-ok";
+    } catch (e) {
+      stage += "/extract:" + ((e && e.message) || "?").slice(0, 50);
+    }
+    if (!playable) {
+      sourcesJson = await fetchSourcesJson(null).catch(() => null);
+      stage += sourcesJson ? "+plain-json" : "+plain-fetch-fail";
+      try {
+        playable = await extractMegapayFile(sourcesJson);
+        stage += "/extract-ok";
+      } catch (e) {
+        stage += "/extract:" + ((e && e.message) || "?").slice(0, 50);
+      }
+    }
     if (!playable) {
       return new Response(
-        JSON.stringify({ status: "error", message: "MegaPlay had no playable stream", retryable: true }),
+        JSON.stringify({ status: "error", message: "MegaPlay had no playable stream [" + stage + "]", retryable: true }),
         { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
       );
     }
+    // Teşhis stage'i meta'da taşınır (ok yolunda zararsız).
+    var mpStage = stage;
 
     // Bazı MegaPlay CDN'leri (ncdn.imgnex.top gibi) CORS'u *açık* tutar ve
     // tarayıcıdan doğrudan çekilebilir; bazıları (megap.mikora.top vb.) yalnızca
@@ -847,6 +954,7 @@ async function handleMegapaySource(request, url) {
           mediaId,
           episode: ep,
           sourceName: "MegaPlay",
+          stage: (typeof mpStage !== "undefined" ? mpStage : "n/a"),
         },
       }),
       { headers: corsHeaders({ "Content-Type": "application/json" }) },
