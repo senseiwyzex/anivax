@@ -21,6 +21,66 @@
 
 const MEGAVID_BASE = "https://megavid.buzz";
 
+// ---- Paylaşılan proxy allowlist (video CDN'leri) ---------------------------
+// /proxy ve /batch aynı kümeyi kullanır: bilinen video CDN'leri + imza yolları.
+// Sülük koruması (çağıran-origin kapısı) aşağıda proxyCallerAllowed'dadır.
+const PROXY_ALLOWED_HOSTS = [
+  "megavid.buzz",
+  "acek-cdn.com",
+  "dramiyos-cdn.com",
+  "anizara.store",
+  "vivibebe.site",
+  "bibiemb.xyz",
+  // vivibebe (bibiemb) segmentleri ByteDance'in p16-ad-sg.ibyteimg.com CDN'inden
+  // gelir. Segmentler "/obj/..." altında olduğundan /public/stream imzası
+  // tutmaz; host'u açıkça izinlemek gerekir.
+  "ibyteimg.com",
+  "byteimg.com",
+  // MegaPlay/Anikoto CDN ailesi. CORS'u açık olanlardan (ncdn.imgnex.top vb.)
+  // tarayıcı doğrudan çeker; referer-şartı koyanlardan (megap.mikora.top vb.)
+  // /proxy üzerinden geçer. Front-hostlar embed'e göre değiştiğinden alt
+  // alanlar suffix eşleşmesiyle yakalanır.
+  "imgnex.top",
+  "akirax.buzz",
+  "nexabloom.top",
+  "mikora.top",
+  "norami.top",
+  "shiora.top",
+  "shiora.site",
+  // MegaPlay'in bazı bölümleri segmentleri PNG-maskeli TS olarak ByteDance
+  // CDN'inden (p16/p19-ad-site-sign-sg.tiktokcdn.com) sunar — Megavid'in
+  // maskesinden farksız; stripPngMask yolu üzerinden geçer (isMegapayStream
+  // path imzası tiktokcdn yollarına uymaz, o yüzden doğru şekilde hassaslaşır).
+  "tiktokcdn.com",
+  "tiktokcdn.in",
+];
+// Sülük koruması: /proxy ve /batch'i yalnızca bizim siteden çağıranlar
+// kullanabilir. Başlığı YOKSA serbest (curl/gizlilik — ayırt edilemez);
+// başlık VARSA ve yabancıysa 403 (başka siteler hattımızı yiyemez).
+// NOT: curl ile başlık taklit eden azimli kötüye kullanım engellenemez —
+// amaç fırsatçı hotlink'leri kesmek, %100 abluka değil.
+const PROXY_CALLER_SUFFIXES = ["anivax.pages.dev"];
+const proxyCallerAllowed = (request) => {
+  let origin = "", referer = "";
+  try { origin = new URL(request.headers.get("Origin") || "").hostname; } catch (e) { /* yok */ }
+  try { referer = new URL(request.headers.get("Referer") || "").hostname; } catch (e) { /* yok */ }
+  if (!origin && !referer) return true;
+  const ok = (h) => h === "localhost" || h === "127.0.0.1" ||
+    PROXY_CALLER_SUFFIXES.some((s) => h === s || h.endsWith("." + s));
+  if ((origin && !ok(origin)) || (referer && !ok(referer))) return false;
+  return true;
+};
+// Hedef URL'nin proxy'lenebilirliği: host allowlist VEYA imza yolu.
+const proxyTargetAllowed = (targetUrl) => {
+  const host = targetUrl.hostname;
+  const isOtakuvidStream = /\/hls3?\//i.test(targetUrl.pathname) ||
+    /^\/public\/stream\//i.test(targetUrl.pathname);
+  const isMegapayStream = /^\/(anime\/)?[0-9a-f]{32}\/[0-9a-f]{32}\//i.test(targetUrl.pathname);
+  return PROXY_ALLOWED_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
+    isOtakuvidStream ||
+    isMegapayStream;
+};
+
 const DEFAULT_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -131,104 +191,68 @@ async function handleSource(request, url) {
 // with the Referer/Origin headers Megavid expects and returns it to the browser
 // with `Access-Control-Allow-Origin: *`. For HLS playlists it rewrites every
 // relative URI inside so subsequent segment requests also route through us.
+// PNG-maske sökücü modül seviyesindedir (/proxy ve /batch aynı kararı verir;
+// const-arrow — paketleyici tuhaflığına karşı function bildirimi yok).
+const stripPngMaskBuf = (buf) => {
+  // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    buf.length < 8 ||
+    buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4e || buf[3] !== 0x47 ||
+    buf[4] !== 0x0d || buf[5] !== 0x0a || buf[6] !== 0x1a || buf[7] !== 0x0a
+  ) {
+    return buf;
+  }
+  // Walk the chunk list until IEND (type 49 45 4E 44) is found; everything
+  // after its 4-byte CRC is the real segment data.
+  let off = 8;
+  while (off + 8 <= buf.length) {
+    const len = (buf[off] << 24) | (buf[off + 1] << 16) | (buf[off + 2] << 8) | buf[off + 3];
+    const type = String.fromCharCode(buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]);
+    if (type === "IEND") {
+      const payloadEnd = off + 8 + len + 4; // after CRC
+      return buf.subarray(payloadEnd);
+    }
+    off += 8 + len + 4;
+  }
+  return buf;
+};
+// Maskesiz-aile imzası (otakuvid + megapay yolu): bu yollardaki baytlar ham
+// MPEG-TS'tir, maske sökülmez. /proxy'deki akış kararıyla birebir aynı kural.
+const isRawStreamPath = (pathname) =>
+  /\/hls3?\//i.test(pathname) ||
+  /^\/public\/stream\//i.test(pathname) ||
+  /^\/(anime\/)?[0-9a-f]{32}\/[0-9a-f]{32}\//i.test(pathname);
 async function handleProxy(request, url) {
   const target = url.searchParams.get("url");
   const referer = url.searchParams.get("referer") || MEGAVID_BASE + "/";
   if (!target) {
     return new Response("Missing url parameter", { status: 400, headers: corsHeaders() });
   }
-  // Only ever fetch from the known video CDNs to avoid becoming an open proxy.
-  const ALLOWED_HOSTS = [
-    "megavid.buzz",
-    "acek-cdn.com",
-    "dramiyos-cdn.com",
-    "anizara.store",
-    "vivibebe.site",
-    "bibiemb.xyz",
-    // vivibebe (bibiemb) segmentleri ByteDance'in p16-ad-sg.ibyteimg.com CDN'inden
-    // gelir. Segmentler "/obj/..." altında olduğundan /public/stream imzası
-    // tutmaz; host'u açıkça izinlemek gerekir.
-    "ibyteimg.com",
-    "byteimg.com",
-    // MegaPlay/Anikoto CDN ailesi. CORS'u açık olanlardan (ncdn.imgnex.top vb.)
-    // tarayıcı doğrudan çeker; referer-şartı koyanlardan (megap.mikora.top vb.)
-    // /proxy üzerinden geçer. Front-hostlar embed'e göre değiştiğinden alt
-    // alanlar suffix eşleşmesiyle yakalanır.
-    "imgnex.top",
-    "akirax.buzz",
-    "nexabloom.top",
-    "mikora.top",
-    "norami.top",
-    "shiora.top",
-    "shiora.site",
-    // MegaPlay'in bazı bölümleri segmentleri PNG-maskeli TS olarak ByteDance
-    // CDN'inden (p16/p19-ad-site-sign-sg.tiktokcdn.com) sunar — Megavid'in
-    // maskesinden farksız; stripPngMask yolu üzerinden geçer (isMegapayStream
-    // path imzası tiktokcdn yollarına uymaz, o yüzden doğru şekilde hassaslaşır).
-    "tiktokcdn.com",
-    "tiktokcdn.in",
-  ];
+  // Hedef allowlist + imza kontrolü modül seviyesindeki paylaşılan
+  // kuraldadır (PROXY_ALLOWED_HOSTS / proxyTargetAllowed).
   let targetUrl;
   try {
     targetUrl = new URL(target);
   } catch {
     return new Response("Invalid url parameter", { status: 400, headers: corsHeaders() });
   }
-  const host = targetUrl.hostname;
-  // otakuvid's masked CDN rotates random front-hosts per-embed (e.g.
-  // eTOjdo3Yv1iw.wcfpc8vpy5udbwh.cfd, WPvsAhSVL0YO.mindbodywellness.space,
-  // m5QqjwpATPzb.infrastructureportal.site ...). We can't enumerate them, so
-  // instead of trusting the host we accept streams whose path carries the
-  // otakuvid HLS signature (/hls3/ or /hls/) — playlists, segments and
-  // iframe/variant lists all live under those paths. Same for the
-  // bibiemb/vivibebe direct-master family (/public/stream/.../master.m3u8).
-  const isOtakuvidStream = /\/hls3?\//i.test(targetUrl.pathname) ||
-    /^\/public\/stream\//i.test(targetUrl.pathname);
-  // MegaPlay CDN ailesi: gerçek MPEG-TS segmentleri .png uzantısıyla gelir
-  // (PNG maskesi YOK — strip gerekmez). Megavid'deki tamponlama riskini
-  // almamak için bunlar da doğrudan akış yapar. Measurement-imkânsız*
-  // (*host yerine path): ön-hostlar embed'e göre döner (megap.norami.top,
-  // ncdn.imgnex.top, bb.akirax.buzz, fetch.nexabloom.top ...) — hepsini
-  // tek tek izinlemek kırılgan. Ortak imza: /anime/{32hex}/{32hex}/… veya
-  // /{32hex}/{32hex}/… (master, varyant, segment, altyazı hepsi bu ağaçta).
-  const isMegapayStream = /^\/(anime\/)?[0-9a-f]{32}\/[0-9a-f]{32}\//i.test(targetUrl.pathname);
-  const hostAllowed =
-    ALLOWED_HOSTS.some((h) => host === h || host.endsWith("." + h)) ||
-    isOtakuvidStream ||
-    isMegapayStream;
+  // Sülük koruması: yabancı siteden gelen tarayıcı istekleri 403 yer
+  // (başlıksız curl/gizlilik serbest — ayırt edilemez).
+  if (!proxyCallerAllowed(request)) {
+    return new Response("Forbidden origin", { status: 403, headers: corsHeaders() });
+  }
+  // Hedef kontrolü paylaşılan kuraldadır (host allowlist + imza yolları).
+  const hostAllowed = proxyTargetAllowed(targetUrl);
   if (!hostAllowed) {
     return new Response("Host not allowed", { status: 403, headers: corsHeaders() });
   }
+  // Akış kararı için imza bayrakları (maskesiz CDN'ler buffer'sız akar).
+  const isOtakuvidStream = /\/hls3?\//i.test(targetUrl.pathname) ||
+    /^\/public\/stream\//i.test(targetUrl.pathname);
+  const isMegapayStream = /^\/(anime\/)?[0-9a-f]{32}\/[0-9a-f]{32}\//i.test(targetUrl.pathname);
 
   const isPlaylistByPath = targetUrl.pathname.endsWith(".m3u8") || targetUrl.pathname.endsWith(".txt");
   const isSub = targetUrl.pathname.endsWith(".vtt");
-
-  // Megavid's CDN front-pads every TS segment with a fake 1x1 PNG header
-  // (a browser-embed obfuscation trick). HLS.js can't demux those bytes, so we
-  // strip the PNG shell and hand back the real MPEG-TS payload.
-  function stripPngMask(buf) {
-    // PNG signature: 89 50 4E 47 0D 0A 1A 0A
-    if (
-      buf.length < 8 ||
-      buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4e || buf[3] !== 0x47 ||
-      buf[4] !== 0x0d || buf[5] !== 0x0a || buf[6] !== 0x1a || buf[7] !== 0x0a
-    ) {
-      return buf;
-    }
-    // Walk the chunk list until IEND (type 49 45 4E 44) is found; everything
-    // after its 4-byte CRC is the real segment data.
-    let off = 8;
-    while (off + 8 <= buf.length) {
-      const len = (buf[off] << 24) | (buf[off + 1] << 16) | (buf[off + 2] << 8) | buf[off + 3];
-      const type = String.fromCharCode(buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]);
-      if (type === "IEND") {
-        const payloadEnd = off + 8 + len + 4; // after CRC
-        return buf.subarray(payloadEnd);
-      }
-      off += 8 + len + 4;
-    }
-    return buf;
-  }
 
   try {
     // Match the Origin header to the referer's origin — otakuvid's CDN only
@@ -328,7 +352,7 @@ async function handleProxy(request, url) {
     }
 
     const buffer = await res.arrayBuffer();
-    const payload = stripPngMask(new Uint8Array(buffer));
+    const payload = stripPngMaskBuf(new Uint8Array(buffer));
     return new Response(payload, { headers: segHeaders });
   } catch (e) {
     return new Response("Proxy error: " + e.message, {
@@ -337,6 +361,94 @@ async function handleProxy(request, url) {
     });
   }
 }
+
+// ---- /batch -----------------------------------------------------------------
+// Toplu segment indirimi: HLS oynatıcının 25'li paket isteğini TEK worker
+// isteğinde karşılar (bölüm başı ~200 istek → ~8). İstek: POST
+// { urls: ["<proxy-url|ham-url>", ...≤25], referer? } — oynatıcı zaten elindeki
+// /proxy URL'lerini verir; her birinin içindeki url+referer parametreleri
+// çözülüp hedefe aynen iletilir (tekil /proxy ile birebir aynı davranış).
+// Yanıt çerçeveli binary: her parça için [4 bayt BE uzunluk][baytlar];
+// indirilemeyen parça uzunluğu 0xFFFFFFFF olur, istemci o parçayı normal
+// /proxy'den çeker. Parçalar değişmez VOD baytları olduğundan yanıt 7 gün
+// önbelleklidir. Sülük kapısı + hedef allowlist aynen uygulanır.
+const BATCH_MAX_URLS = 25;
+const handleBatch = async (request, url) => {
+  if (request.method !== "POST") {
+    return new Response("Method not allowed", { status: 405, headers: corsHeaders() });
+  }
+  if (!proxyCallerAllowed(request)) {
+    return new Response("Forbidden origin", { status: 403, headers: corsHeaders() });
+  }
+  let body = null;
+  try { body = await request.json(); } catch (e) { /* fallthrough */ }
+  const rawUrls = body && Array.isArray(body.urls) ? body.urls.slice(0, BATCH_MAX_URLS) : [];
+  const fallbackReferer = (body && typeof body.referer === "string" && body.referer) || MEGAVID_BASE + "/";
+  if (!rawUrls.length) {
+    return new Response("Missing urls", { status: 400, headers: corsHeaders() });
+  }
+  // Her girdiyi (proxy-URL ya da ham URL) hedef+referer çiftine çevir ve doğrula.
+  const jobs = [];
+  for (const raw of rawUrls) {
+    let target = null, ref = fallbackReferer;
+    try {
+      const pu = new URL(String(raw));
+      if (pu.pathname === "/proxy") {
+        const inner = pu.searchParams.get("url");
+        const innerRef = pu.searchParams.get("referer");
+        if (inner) target = inner;
+        if (innerRef) ref = innerRef;
+      } else {
+        target = String(raw);
+      }
+    } catch (e) { /* bozuk girdi → boş parça */ }
+    let okUrl = null;
+    if (target) {
+      try {
+        const tu = new URL(target);
+        if (proxyTargetAllowed(tu)) okUrl = tu.href;
+      } catch (e) { /* bozuk hedef */ }
+    }
+    jobs.push({ okUrl, ref });
+  }
+  const parts = await Promise.all(jobs.map(async (j) => {
+    if (!j.okUrl) return null;
+    try {
+      let origin;
+      try { origin = new URL(j.ref).origin; } catch (e) { origin = MEGAVID_BASE; }
+      const res = await fetchT(j.okUrl, { referer: j.ref, origin: origin, accept: "*/*" }, 20000);
+      if (!res.ok) return null;
+      const buf = await res.arrayBuffer();
+      if (!buf || !buf.byteLength) return null;
+      // /proxy ile birebir aynı baytlar: maskesiz-aile ham, diğerleri maskesizleştirilir.
+      let rawPath = false;
+      try { rawPath = isRawStreamPath(new URL(j.okUrl).pathname); } catch (e) { /* ham sayılmaz */ }
+      const out = rawPath ? new Uint8Array(buf) : stripPngMaskBuf(new Uint8Array(buf));
+      if (!out || !out.byteLength) return null;
+      return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+    } catch (e) { return null; }
+  }));
+  // Çerçevele: [u32be len][bytes]* — len 0xFFFFFFFF = parça yok.
+  const chunks = [];
+  for (const b of parts) {
+    const hdr = new Uint8Array(4);
+    if (!b) {
+      hdr[0] = 0xFF; hdr[1] = 0xFF; hdr[2] = 0xFF; hdr[3] = 0xFF;
+      chunks.push(hdr);
+    } else {
+      const n = b.byteLength;
+      hdr[0] = (n >>> 24) & 0xFF; hdr[1] = (n >>> 16) & 0xFF;
+      hdr[2] = (n >>> 8) & 0xFF; hdr[3] = n & 0xFF;
+      chunks.push(hdr, new Uint8Array(b));
+    }
+  }
+  return new Response(new Blob(chunks), {
+    headers: corsHeaders({
+      "Content-Type": "application/octet-stream",
+      "Cache-Control": "public, max-age=604800, immutable",
+    }),
+  });
+};
 
 // ---- /translate --------------------------------------------------------------
 // Proxies an OpenAI-compatible chat completion (Z.AI / GLM) request so the
@@ -939,7 +1051,12 @@ async function handleMegapaySource(request, url) {
   const title = url.searchParams.get("title");
   const epRaw = url.searchParams.get("ep") || "1";
   const ep = parseInt(epRaw, 10) || 1;
-  if (!title) {
+  // MAL/AniList kimliği varsa Anikoto aramasına GEREK YOK: megaplay'in
+  // /stream/mal|ani/ kapıları doğrudan embed'e gider (2 istek çözümleme,
+  // Anikoto HTML/API'sinden bağımsız). Yoksa başlık zinciri çalışır.
+  const malId = (url.searchParams.get("malid") || "").trim();
+  const aniId = (url.searchParams.get("aniid") || "").trim();
+  if (!title && !malId && !aniId) {
     return new Response(
       JSON.stringify({ status: "error", message: "Missing title parameter" }),
       { status: 400, headers: corsHeaders({ "Content-Type": "application/json" }) },
@@ -949,6 +1066,27 @@ async function handleMegapaySource(request, url) {
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
 
   try {
+    let embedPath = null;   // örn. /stream/mal/52991/9/sub
+    let slug = null, anikotoId = null, embedId = null, via = "title";
+    // Hızlı yol: MAL → AniList → başlık zinciri. Her basamak sessizce
+    // sonrakine düşer; hepsi biterse altta başlık hatası döner.
+    const tryDirectId = async (kind, id) => {
+      const p = `/stream/${kind}/${encodeURIComponent(id)}/${ep}/sub`;
+      const er = await fetchT(MEGAPLAY_BASE + p, {
+        referer: MEGAPLAY_BASE + "/",
+        accept: "text/html, */*",
+      }, 10000);
+      const eh = await er.text();
+      if (/data-id="(\d+)"/.test(eh) || /data-mediaid="(\d+)"/.test(eh)) {
+        embedPath = p;
+        via = kind;
+        return true;
+      }
+      return false;
+    };
+    if (malId) { try { await tryDirectId("mal", malId); } catch (e) { /* düş */ } }
+    if (!embedPath && aniId) { try { await tryDirectId("ani", aniId); } catch (e) { /* düş */ } }
+    if (!embedPath && title) {
     // 1) title → anikoto iç kimliği. Arama sayfasından slug alınır (title'ın
     //    İngilizce/romaji/eşanlamlısıyla normalleştirilmiş eşleşme tercih edilir).
     const searchRes = await fetchT(`${ANIKOTO_SITE}/search?keyword=${encodeURIComponent(title)}`, {
@@ -968,8 +1106,7 @@ async function handleMegapaySource(request, url) {
       results.find((r) => r.name && norm(r.name) === want) ||
       results.find((r) => r.jp && norm(r.jp) === want) ||
       results[0];
-    const slug = chosen.slug;
-
+    slug = chosen.slug;
     // 2) slug → anikoto iş içi kimliği (watch sayfasındaki data-anime-id).
     const watchRes = await fetchT(`${ANIKOTO_SITE}/watch/${encodeURIComponent(slug)}/ep-1`, {
       referer: ANIKOTO_SITE + "/",
@@ -983,7 +1120,7 @@ async function handleMegapaySource(request, url) {
         { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
       );
     }
-    const anikotoId = idMatch[1];
+    anikotoId = idMatch[1];
 
     // 3) iş içi kimlik → bölüm → episode_embed_id (Anikoto API).
     const seriesRes = await fetchT(`${ANIKOTO_API}/series/${anikotoId}`, {
@@ -995,7 +1132,7 @@ async function handleMegapaySource(request, url) {
       ? seriesJson.data.episodes
       : [];
     const epInfo = episodes.find((e) => Number(e.number) === ep) || null;
-    const embedId = epInfo && epInfo.episode_embed_id;
+    embedId = epInfo && epInfo.episode_embed_id;
     if (!embedId) {
       return new Response(
         JSON.stringify({ status: "error", message: `Episode ${ep} not found on MegaPlay`, retryable: false }),
@@ -1003,9 +1140,18 @@ async function handleMegapaySource(request, url) {
       );
     }
 
+    embedPath = `/stream/s-2/${encodeURIComponent(embedId)}/sub`;
+    } // if (!embedPath && title) — başlık zinciri sonu
+    if (!embedPath) {
+      return new Response(
+        JSON.stringify({ status: "error", message: "Anime not found on MegaPlay", retryable: false }),
+        { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
+      );
+    }
+
     // 4) embed sayfası → data-id (megaplay media kimliği). Bu sayfa Referer
     //    beklemeden hata döner; megavid embed'deki maske gibi doğrudan çekim.
-    const embedRes = await fetchT(`${MEGAPLAY_BASE}/stream/s-2/${encodeURIComponent(embedId)}/sub`, {
+    const embedRes = await fetchT(MEGAPLAY_BASE + embedPath, {
       referer: MEGAPLAY_BASE + "/",
       accept: "text/html, */*",
     }, 10000);
@@ -1029,7 +1175,7 @@ async function handleMegapaySource(request, url) {
     async function fetchSourcesJson(sParam) {
       const q = `${MEGAPLAY_BASE}/stream/getSourcesNew?id=${encodeURIComponent(mediaId)}` + (sParam ? `&s=${encodeURIComponent(sParam)}` : "");
       const res = await fetchT(q, {
-        referer: `${MEGAPLAY_BASE}/stream/s-2/${encodeURIComponent(embedId)}/sub`,
+        referer: MEGAPLAY_BASE + embedPath,
         headers: { "X-Requested-With": "XMLHttpRequest" },
         accept: "application/json, text/plain, */*",
       }, 10000);
@@ -1098,6 +1244,9 @@ async function handleMegapaySource(request, url) {
           mediaId,
           episode: ep,
           sourceName: "MegaPlay",
+          via,
+          malId: malId || null,
+          aniId: aniId || null,
           stage: (typeof mpStage !== "undefined" ? mpStage : "n/a"),
         },
       }),
@@ -1198,6 +1347,9 @@ export default {
     }
     if (url.pathname === "/proxy") {
       return await handleProxy(request, url);
+    }
+    if (url.pathname === "/batch") {
+      return await handleBatch(request, url);
     }
     if (url.pathname === "/translate") {
       return await handleTranslate(request, url);

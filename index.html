@@ -2769,6 +2769,13 @@ function preferredAninekoSource(){
 // Yalnızca AKTİF aileler isten mek: kullanıcı belirli birini seçtiyse `source=`,
 // değilse `sources=<aktif aileler>`. Kapatılan/broken sunucuya istek atılmaz.
 async function aninekoResolveSource(anime, episodeNum){
+  // Şalter: Anineko altyapısı çökmüşse (üst üste global hata) 10dk boyunca
+  // hiç deneme — zincir beklemeden sonraki kata düşer. Düzelince ilk başarı
+  // şalteri kaldırır. Bölüme-özel "bulunamadı" şalteri attırmaz.
+  try{
+    const until = Number(localStorage.getItem('anivax_anineko_down_until') || 0);
+    if(until && Date.now() < until) return null;
+  }catch(e){}
   const titles = [];
   if(anime.title && anime.title.english) titles.push(anime.title.english);
   if(anime.title && anime.title.romaji) titles.push(anime.title.romaji);
@@ -2786,13 +2793,24 @@ async function aninekoResolveSource(anime, episodeNum){
     param = `&sources=${encodeURIComponent(families.join(','))}`;
   }
   const qs = `${ANINEKO_SOURCE_PATH}?ep=${episodeNum}${param}`;
+  let attempted = 0, outageHits = 0;
   for(const t of titles){
     if(!t) continue;
+    attempted++;
     try{
       const res = await fetch(`${MEGAVID_WORKER_BASE}${qs}&title=${encodeURIComponent(t)}`);
       const data = await res.json().catch(()=>null);
-      if(res.ok && data && data.status === 'ok' && data.source) return data;
-    }catch(e){ /* try next title */ }
+      if(res.ok && data && data.status === 'ok' && data.source){
+        try{ localStorage.removeItem('anivax_anineko_down_until'); }catch(e){}
+        return data;
+      }
+      // retryable:false = bu anime gerçekten yok (şalterlik değil); diğer
+      // türlü hata = altyapı sorunu olabilir.
+      if(!(data && data.status === 'error' && data.retryable === false)) outageHits++;
+    }catch(e){ outageHits++; /* try next title */ }
+  }
+  if(attempted > 0 && outageHits >= attempted){
+    try{ localStorage.setItem('anivax_anineko_down_until', String(Date.now() + 10*60*1000)); }catch(e){}
   }
   logClientError({ source:'otakuvid', message: 'Anineko source resolve failed', context: (anime && anime.id ? anime.id + ' ep' + episodeNum : 'ep' + episodeNum) });
   return null;
@@ -3127,11 +3145,24 @@ async function megapayResolveSource(anime, episodeNum){
   if(anime.title && anime.title.english) titles.push(anime.title.english);
   if(anime.title && anime.title.romaji) titles.push(anime.title.romaji);
   if(anime.title && anime.title.native) titles.push(anime.title.native);
+  // MAL/AniList kimliği varsa worker Anikoto aramasını atlar (mal/ani direkt
+  // kapı, 2 istek çözümleme). İlk başlık denemesine eklenir; olmazsa başlık
+  // zinciri aynen devam eder.
+  const ids = [];
+  if(anime.idMal) ids.push('malid=' + encodeURIComponent(anime.idMal));
+  if(anime.id) ids.push('aniid=' + encodeURIComponent(anime.id));
+  const idQs = ids.length ? ('&' + ids.join('&')) : '';
+  // Başlık yok ama kimlik varsa: worker mal/ani kapısını dener (yer tutucu
+  // başlık zincire girmez — kimlikler tutmazsa bulunamadı döner).
+  if(!titles.length && ids.length) titles.push('x');
   const qs = `${MEGAPAY_SOURCE_PATH}?ep=${episodeNum}`;
+  let first = true;
   for(const t of titles){
     if(!t) continue;
     try{
-      const res = await fetch(`${MEGAVID_WORKER_BASE}${qs}&title=${encodeURIComponent(t)}`);
+      const extra = first ? idQs : '';
+      first = false;
+      const res = await fetch(`${MEGAVID_WORKER_BASE}${qs}&title=${encodeURIComponent(t)}${extra}`);
       const data = await res.json().catch(()=>null);
       if(res.ok && data && data.status === 'ok' && data.source) return data;
       if(res.ok && data && data.status === 'error' && data.retryable === false) megapayLastStatus = 'missing';
@@ -6014,8 +6045,154 @@ function attachHlsErrorRecovery(hls, vid){
   vid.addEventListener('playing', ()=>{ networkRetries = 0; mediaRecoveries = 0; playbackActivity.fatal = false; }); // reset once playback is healthy again
 }
 
-async function mountHlsPlayer(frame, url, subtitleTracks){
-  playbackActivity = { last: Date.now(), fatal: false }; // yeni mount → temiz durum
+// ================= TOPLU SEGMENT YÜKLEYİCİ (batch loader) =================
+// HLS oynatıcı parça başına 1 worker isteği yapar (~200/bölüm). Bu yükleyici
+// o anki parçayı normal /proxy'den HEMEN çeker (hızlı ilk kare) ve arka planda
+// SONRAKİ 25 parçayı TEK /batch isteğiyle önden indirir. Sonraki parçalar
+// önbellekten gelir → bölüm başı ~200 istek yerine ~10.
+// Güvenlik: pakette hata olursa ilgili parça normal yoldan çekilir (davranış
+// birebir eskiye döner). ?nobatch=1 ile tamamen kapatılabilir.
+const BATCH_HLS_ON = !/[\?&]nobatch=1/.test(location.search);
+const BATCH_AHEAD = 25;
+const BATCH_CACHE_MAX = 40;
+const batchFragCache = new Map(); // url -> ArrayBuffer (FIFO)
+let batchPending = null; // { urls:[...] } devam eden arka plan paketi
+function batchCachePut(url, data){
+  if(batchFragCache.has(url)) batchFragCache.delete(url);
+  batchFragCache.set(url, data);
+  while(batchFragCache.size > BATCH_CACHE_MAX){
+    const oldest = batchFragCache.keys().next().value;
+    batchFragCache.delete(oldest);
+  }
+}
+class BatchHlsLoader {
+  constructor(config){ this.config = config || {}; this.ctrls = []; this.deps = []; }
+  destroy(){ this.abort(); }
+  abort(){
+    this.ctrls.forEach((c)=>{ try{ c.abort(); }catch(e){} });
+    this.ctrls = [];
+    this.deps.forEach((d)=>{ try{ d.abort(); }catch(e){} });
+    this.deps = [];
+  }
+  _track(ctrl){ this.ctrls.push(ctrl); return ctrl; }
+  _fetchBuf(url, ms){
+    const ctrl = this._track(new AbortController());
+    const timer = setTimeout(()=>{ try{ ctrl.abort(); }catch(e){} }, ms || 20000);
+    return fetch(url, { signal: ctrl.signal }).then((r)=>{
+      clearTimeout(timer);
+      if(!r.ok) throw new Error('http ' + r.status);
+      return r.arrayBuffer();
+    }).catch((e)=>{ clearTimeout(timer); throw e; });
+  }
+  _stats(t0, tFirst, loaded){
+    const tEnd = Date.now();
+    const span = Math.max(25, tEnd - Math.max(tFirst || t0, t0));
+    return {
+      aborted: false, loaded: loaded, retry: 0, total: loaded, chunkCount: 1,
+      bwEstimate: Math.floor((loaded * 8000) / span),
+      loading: { start: t0, first: tFirst || t0, end: tEnd },
+      parsing: { start: tEnd, end: tEnd },
+      buffering: { start: 0, first: 0, end: 0 }
+    };
+  }
+  _succeed(callbacks, context, data, t0, tFirst){
+    try{
+      callbacks.onSuccess({ url: context.url, data: data }, this._stats(t0, tFirst, data.byteLength), context);
+    }catch(e){ /* hls teardown yarışı — sessiz */ }
+  }
+  _direct(context, config, callbacks){
+    const t0 = Date.now();
+    const to = (config && config.fragLoadingTimeOut) || 20000;
+    this._fetchBuf(context.url, to).then((data)=>{
+      this._succeed(callbacks, context, data, t0, 0);
+    }).catch((e)=>{
+      try{ callbacks.onError({ code: 0, text: String((e && e.message) || e) }, context); }catch(ee){}
+    });
+  }
+  _siblings(frag){
+    try{
+      const details = frag && frag.level && frag.level.details;
+      const frags = details && details.fragments;
+      if(!Array.isArray(frags) || !frags.length) return [];
+      let idx = frags.indexOf(frag);
+      if(idx < 0 && frag && typeof frag.sn !== 'undefined'){
+        for(let i = 0; i < frags.length; i++){ if(frags[i] && frags[i].sn === frag.sn){ idx = i; break; } }
+      }
+      if(idx < 0) return [];
+      const out = [];
+      for(let i = idx + 1; i < frags.length && out.length < BATCH_AHEAD; i++){
+        const u = frags[i] && frags[i].url;
+        if(typeof u === 'string' && u) out.push(u);
+      }
+      return out;
+    }catch(e){ return []; }
+  }
+  _kickBatch(urls){
+    if(!BATCH_HLS_ON || !urls.length) return;
+    const fresh = [];
+    for(const u of urls){
+      if(batchFragCache.has(u)) continue;
+      if(batchPending && batchPending.urls.indexOf(u) >= 0) continue;
+      fresh.push(u);
+      if(fresh.length >= BATCH_AHEAD) break;
+    }
+    if(!fresh.length) return;
+    if(batchPending) return; // tek paket uçar
+    const body = JSON.stringify({ urls: fresh, referer: location.href });
+    const p = fetch(MEGAVID_WORKER_BASE + '/batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body
+    }).then((r)=>{
+      if(!r.ok) throw new Error('batch http ' + r.status);
+      return r.arrayBuffer();
+    }).then((buf)=>{
+      const dv = new DataView(buf);
+      let off = 0;
+      for(let i = 0; i < fresh.length; i++){
+        if(off + 4 > dv.byteLength) break;
+        const len = dv.getUint32(off);
+        off += 4;
+        if(len === 0xFFFFFFFF) continue; // parça yok — normal yoldan gelir
+        if(off + len > dv.byteLength) break;
+        batchCachePut(fresh[i], buf.slice(off, off + len));
+        off += len;
+      }
+    }).catch(()=>{ /* sessiz — parçalar normal yoldan gelir */ })
+      .finally(()=>{ if(batchPending && batchPending.urls === freshBatchUrls) batchPending = null; });
+    const freshBatchUrls = fresh;
+    batchPending = { urls: freshBatchUrls, promise: p };
+  }
+  load(context, config, callbacks){
+    const type = context && context.type;
+    if(!BATCH_HLS_ON || (type !== 'fragment' && type !== 'part')){
+      // Liste/altyazı istekleri veya kapalı mod: default loader.
+      try{
+        const D = new Hls.DefaultConfig.loader(this.config);
+        this.deps.push(D);
+        D.load(context, config, callbacks);
+      }catch(e){ this._direct(context, config, callbacks); }
+      return;
+    }
+    const url = context.url;
+    if(batchFragCache.has(url)){
+      const data = batchFragCache.get(url);
+      const t = Date.now();
+      this._succeed(callbacks, context, data, t, t);
+      try{ this._kickBatch(this._siblings(context.frag)); }catch(e){}
+      return;
+    }
+    // Önbellekte yok: HEMEN direkt çek + arkadan sonraki paketi indir.
+    const t0 = Date.now();
+    const to = (config && config.fragLoadingTimeOut) || 20000;
+    this._fetchBuf(url, to).then((data)=>{
+      this._succeed(callbacks, context, data, t0, 0);
+      try{ this._kickBatch(this._siblings(context.frag)); }catch(e){}
+    }).catch((e)=>{
+      try{ callbacks.onError({ code: 0, text: String((e && e.message) || e) }, context); }catch(ee){}
+    });
+  }
+}
+
+async function mountHlsPlayer(frame, url, subtitleTracks){  playbackActivity = { last: Date.now(), fatal: false }; // yeni mount → temiz durum
   const vid = document.createElement('video');
   vid.id = 'mainVideoEl';
   vid.controls = false;
@@ -6102,6 +6279,8 @@ async function mountHlsPlayer(frame, url, subtitleTracks){
     // hiccups without starving, but capped so seeking/switching quality
     // doesn't feel sluggish from an overly large buffer.
     hlsInstance = new Hls({
+      // Toplu yükleyici: 25'li paketler (~200 istek → ~10). ?nobatch=1 ile kapanır.
+      ...(BATCH_HLS_ON ? { loader: BatchHlsLoader } : {}),
       maxBufferLength: 30,
       maxMaxBufferLength: 60,
       maxBufferSize: 60 * 1000 * 1000, // 60MB cap, avoids unbounded memory growth on long episodes
