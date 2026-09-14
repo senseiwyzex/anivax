@@ -806,12 +806,21 @@ const MEGAPLAY_BASE = "https://megaplay.buzz";
 // CORS-açık archive.org'dan DİREKT çeker (ACAO:*, range destekli) — worker'a
 // segment yükü YOK, bölüm başı maliyet 1-3 çözümleme isteği. Altyazı yoksa
 // istemci AI çeviriyi ham videonun üstüne koyar (ayrı katman).
-const ARCHIVE_BAD_WORDS = ["reaction", "review", "amv", "pv", "trailer", "teaser", "opening", "ending", "op ", "ed ", " ost", "cover", "clip", "moment", "top 10", "vs ", "amv)", "(amv", "mashup", "nightcore"];
+const ARCHIVE_BAD_WORDS = ["reaction", "review", "amv", "pv", "trailer", "teaser", "opening", "ending", "op ", "ed ", " ost", "cover", "clip", "moment", "top 10", "vs ", "amv)", "(amv", "mashup", "nightcore",
+  // Anime bölümü ASLA olamayacak içerik türleri: live-action uyarlamalar aynı
+  // seri adını taşır (Death Note draması gibi) ve bölüm eşleşmesini kandırır.
+  // Yanlış içerik oynatmak, dürüst "yok"tan kötüdür → zincir devam eder.
+  "drama", "live action", "live-action", "liveaction", "musical", "parody",
+  "relight", "recap", "tiktok", "twitch", "smosh", "whiteboard", "5 seconds"];
 // Gömülü (hardsub) altyazılı gruplar: video ham değildir — en sona atılır,
 // meta.subBurned ile işaretlenir (istemci ham olanı tercih eder).
 const ARCHIVE_HARDSUB_GROUPS = ["pahe", "subsplease", "horriblesubs"];
 function archiveEpMatch(text, ep) {
-  const t = " " + String(text || "").toLowerCase().replace(/[_\.\-]+/g, " ") + " ";
+  let t = " " + String(text || "").toLowerCase().replace(/[_\.\-]+/g, " ") + " ";
+  // Sezon belirteci bölüm değildir: "S01E15" içindeki "01" sezonu, "15" bölümü
+  // gösterir. Sezonu silip eşleşmeyi kalan bölüm işaretinden yap ("e15").
+  t = t.replace(/\bseason[\s._-]*\d{1,2}\b/gi, " ");
+  t = t.replace(/\bs[\s._-]*\d{1,2}\b(?=[\s._-]*e[\s._-]*\d)/gi, " ");
   const n = String(ep);
   const nz = n.length === 1 ? "0" + n : n;
   const pats = [
@@ -821,13 +830,22 @@ function archiveEpMatch(text, ep) {
   ];
   return pats.some((rx) => rx.test(t));
 }
-function archiveScore(item, ep) {
+function archiveScore(item, ep, titleNorm) {
   const title = String(item.title || "");
   const id = String(item.identifier || "");
   const blob = (title + " " + id).toLowerCase();
   if (ARCHIVE_BAD_WORDS.some((w) => blob.includes(w))) return -1000;
   if (!archiveEpMatch(title + " " + id, ep)) return -1000;
+  const n = String(ep);
   let s = 0;
+  // Seri adıyla açılan aday (death-note-01 gibi) + başlık–bölüm bitişikliği
+  // ("Death Note 01", "Death Note ep 1"): doğru bölüm, yanlış franchise değil.
+  try {
+    const slug = String(titleNorm || "").trim().replace(/\s+/g, "-").toLowerCase();
+    if (slug && id.toLowerCase().startsWith(slug)) s += 20;
+    const esc = String(titleNorm || "").trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "[\\s._-]+");
+    if (esc && new RegExp(esc + "[\\s._-]*((episode|ep|e|s\\d+\\s*e)\\s*)?0?" + n + "\\b").test(" " + blob + " ")) s += 25;
+  } catch (e) { /* bonus yok, skor aynen */ }
   if (id.includes("erai")) s += 50;              // ham + multisub garantisi
   if (/1080p/i.test(blob)) s += 20;
   else if (/720p/i.test(blob)) s += 10;
@@ -860,8 +878,8 @@ async function handleArchiveSource(request, url) {
     // 1) archive.org gelişmiş arama (anahtarsız, herkese açık).
     const q = "title:(" + titleNorm + ") AND mediatype:movies";
     const searchRes = await fetchT(
-      "https://archive.org/advancedsearch.php?q=" + encodeURIComponent(q) +
-      "&fl[]=identifier,title,date&rows=40&output=json",
+"https://archive.org/advancedsearch.php?q=" + encodeURIComponent(q) +
+       "&fl[]=identifier,title,date&rows=100&output=json",
       { accept: "application/json, */*" }, 15000);
     const searchJson = await searchRes.json().catch(() => null);
     const docs = (searchJson && searchJson.response && Array.isArray(searchJson.response.docs))
@@ -879,7 +897,7 @@ async function handleArchiveSource(request, url) {
     for (const d of docs) {
       const blob = norm((d.title || "") + " " + (d.identifier || ""));
       if (!keywords.every((k) => blob.includes(k))) continue;
-      const r = archiveScore(d, ep);
+      const r = archiveScore(d, ep, titleNorm);
       if (r.score > -1000) scored.push({ d, s: r.score, burned: r.burned });
     }
     scored.sort((a, b) => b.s - a.s);
@@ -901,8 +919,18 @@ async function handleArchiveSource(request, url) {
             !/sample|preview|trailer/i.test(f.name) && Number(f.size || 0) > 20 * 1024 * 1024)
           .sort((a, b) => Number(b.size || 0) - Number(a.size || 0));
         if (!mp4s.length) continue;
-        // En büyük MP4'ü al (bölümün kendisi; küçükler klip/parça olur).
-        const mp4 = mp4s[0];
+        // Seri paketlerinde (01 - Rebirth.mp4, 02 - ... gibi) en büyük dosya
+        // başka bölümdür → istenen bölümü dosya adından seç. Tek dosyalı
+        // öğede en büyük dosya zaten bölümdür. Eşleşme yoksa öğeyi atla
+        // (yanlış bölüm oynatmak yerine zincir devam eder).
+        let mp4 = null;
+        if (mp4s.length === 1) mp4 = mp4s[0];
+        else {
+          const named = mp4s.filter((f) => archiveEpMatch(f.name, ep));
+          if (!named.length) continue;
+          named.sort((a, b) => Number(b.size || 0) - Number(a.size || 0));
+          mp4 = named[0];
+        }
         const subs = files.filter((f) => f && typeof f.name === "string" && /\.(srt|vtt|ass)$/i.test(f.name));
         const engFirst = subs.sort((a, b) => {
           const ae = /eng|english/i.test(a.name) ? 0 : 1;
