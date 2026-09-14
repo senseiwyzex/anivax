@@ -6074,15 +6074,38 @@ function batchCachePut(url, data){
     batchFragCache.delete(oldest);
   }
 }
+function freshLoaderStats(){
+  const z = Date.now();
+  return {
+    aborted: false, loaded: 0, retry: 0, total: 0, chunkCount: 1, bwEstimate: 0,
+    loading: { start: z, first: z, end: z },
+    parsing: { start: z, end: z },
+    buffering: { start: z, first: z, end: z }
+  };
+}
+// (BatchHlsLoader aşağıda — hls.js sözleşmeli yükleyici)
 class BatchHlsLoader {
-  constructor(config){ this.config = config || {}; this.ctrls = []; this.deps = []; }
+  constructor(config){
+    this.config = config || {};
+    this.ctrls = []; this.deps = [];
+    // hls.js SÖZLEŞMESİ (1.5.13 fragment-loader.ts:99,211,371): loader.stats ve
+    // loader.context ÖZELLİK olarak okunur/yazılır. Eksikse hls.js içinde
+    // TypeError patlar ve cross-origin "Script error." olarak görünür.
+    // TEK stats nesnesi tutulur ve yerinde güncellenir (referanslar şaşmaz).
+    this.context = null;
+    this.stats = freshLoaderStats();
+  }
   destroy(){ this.abort(); }
   abort(){
+    try{ if(this.stats) this.stats.aborted = true; }catch(e){}
     this.ctrls.forEach((c)=>{ try{ c.abort(); }catch(e){} });
     this.ctrls = [];
     this.deps.forEach((d)=>{ try{ d.abort(); }catch(e){} });
     this.deps = [];
   }
+  // İsteğe bağlı arayüzler (VOD'da kullanılmaz ama hls.js bakabilir).
+  getCacheAge(){ return null; }
+  getResponseHeader(name){ return null; }
   _track(ctrl){ this.ctrls.push(ctrl); return ctrl; }
   _fetchBuf(url, ms){
     const ctrl = this._track(new AbortController());
@@ -6106,7 +6129,20 @@ class BatchHlsLoader {
   }
   _succeed(callbacks, context, data, t0, tFirst){
     try{
-      callbacks.onSuccess({ url: context.url, data: data }, this._stats(t0, tFirst, data.byteLength), context);
+      // this.stats YERİNDE güncellenir (hls.js elindeki referanstan okur —
+      // yeni nesne vermek eski referansı bayat bırakır).
+      const tEnd = Date.now();
+      const span = Math.max(25, tEnd - Math.max(tFirst || t0, t0));
+      const st = this.stats || (this.stats = freshLoaderStats());
+      st.aborted = false;
+      st.loaded = data.byteLength;
+      st.total = data.byteLength;
+      st.retry = 0;
+      st.chunkCount = 1;
+      st.bwEstimate = Math.floor((data.byteLength * 8000) / span);
+      st.loading.start = t0; st.loading.first = tFirst || t0; st.loading.end = tEnd;
+      st.parsing.start = tEnd; st.parsing.end = tEnd;
+      callbacks.onSuccess({ url: context.url, data: data }, st, context);
     }catch(e){ /* hls teardown yarışı — sessiz */ }
   }
   _direct(context, config, callbacks){
@@ -6171,6 +6207,13 @@ class BatchHlsLoader {
     batchPending = { urls: freshBatchUrls, promise: p };
   }
   load(context, config, callbacks){
+    // Her yüklemede sözleşme alanları tazelenir.
+    try{
+      this.context = context || null;
+      const fresh = freshLoaderStats();
+      if(this.stats){ Object.assign(this.stats, fresh); this.stats.loading = fresh.loading; this.stats.parsing = fresh.parsing; this.stats.buffering = fresh.buffering; }
+      else this.stats = fresh;
+    }catch(e){}
     const type = context && context.type;
     if(!BATCH_HLS_ON || (type !== 'fragment' && type !== 'part')){
       // Liste/altyazı istekleri veya kapalı mod: default loader.
