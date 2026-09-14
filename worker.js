@@ -1102,32 +1102,62 @@ async function handleMegapaySource(request, url) {
       );
     }
     const want = norm(title);
-    const chosen =
-      results.find((r) => r.name && norm(r.name) === want) ||
-      results.find((r) => r.jp && norm(r.jp) === want) ||
-      results[0];
+    const cands = results.slice(0, 5);
+    let chosen = results.find((r) => r.name && norm(r.name) === want) ||
+      results.find((r) => r.jp && norm(r.jp) === want) || null;
+    // İstek-içi slug önbelleği: watch+series her slug için en fazla 1 kez çekilir.
+    const slugCache = new Map();
+    const getSlugData = async (sl) => {
+      if (slugCache.has(sl)) return slugCache.get(sl);
+      const watchRes = await fetchT(`${ANIKOTO_SITE}/watch/${encodeURIComponent(sl)}/ep-1`, {
+        referer: ANIKOTO_SITE + "/",
+        accept: "text/html, */*",
+      }, 10000);
+      const watchHtml = await watchRes.text();
+      const idMatch = watchHtml.match(/data-anime-id="?(\d+)"?/i);
+      if (!idMatch) throw new Error("no-anime-id");
+      const seriesRes = await fetchT(`${ANIKOTO_API}/series/${idMatch[1]}`, {
+        referer: ANIKOTO_SITE + "/",
+        accept: "application/json",
+      }, 10000);
+      const seriesJson = await seriesRes.json().catch(() => null);
+      const out = { anikotoId: idMatch[1], seriesJson };
+      slugCache.set(sl, out);
+      return out;
+    };
+    if (!chosen) {
+      // Tam eşleşme yok (film/özel-bölüm/sezon karmaşası): önce MAL/AniList ID
+      // eşleşmesi (kesin — yanlış sezon videosu engellenir), yoksa bölüm-sayısı
+      // filtresi (istenen bölümü barındırmayan film/special elenir). En fazla
+      // 3 aday yoklanır; hepsi ıskalarsa eski davranış (results[0]).
+      let countPick = null;
+      for (const r of cands.slice(0, 3)) {
+        try {
+          const sd = await getSlugData(r.slug);
+          const sm = sd.seriesJson && sd.seriesJson.data && sd.seriesJson.data.anime;
+          if (malId && sm && String(sm.mal_id) === String(malId)) { chosen = r; break; }
+          if (aniId && sm && String(sm.ani_id) === String(aniId)) { chosen = r; break; }
+          const eps = sd.seriesJson && sd.seriesJson.data && Array.isArray(sd.seriesJson.data.episodes)
+            ? sd.seriesJson.data.episodes.length : 0;
+          if (!countPick && eps >= ep) countPick = r;
+        } catch (e) { /* sıradaki aday */ }
+      }
+      chosen = chosen || countPick || results[0];
+    }
     slug = chosen.slug;
-    // 2) slug → anikoto iş içi kimliği (watch sayfasındaki data-anime-id).
-    const watchRes = await fetchT(`${ANIKOTO_SITE}/watch/${encodeURIComponent(slug)}/ep-1`, {
-      referer: ANIKOTO_SITE + "/",
-      accept: "text/html, */*",
-    }, 10000);
-    const watchHtml = await watchRes.text();
-    const idMatch = watchHtml.match(/data-anime-id="?(\d+)"?/i);
-    if (!idMatch) {
+
+    // 2)+3) kimlik + bölüm listesi (önbellekten, tek çekim).
+    let sdMain = null;
+    try {
+      sdMain = await getSlugData(chosen.slug);
+    } catch (e) {
       return new Response(
         JSON.stringify({ status: "error", message: "Could not resolve Anikoto id", retryable: true }),
         { status: 502, headers: corsHeaders({ "Content-Type": "application/json" }) },
       );
     }
-    anikotoId = idMatch[1];
-
-    // 3) iş içi kimlik → bölüm → episode_embed_id (Anikoto API).
-    const seriesRes = await fetchT(`${ANIKOTO_API}/series/${anikotoId}`, {
-      referer: ANIKOTO_SITE + "/",
-      accept: "application/json",
-    }, 10000);
-    const seriesJson = await seriesRes.json().catch(() => null);
+    anikotoId = sdMain.anikotoId;
+    const seriesJson = sdMain.seriesJson;
     const episodes = seriesJson && seriesJson.data && Array.isArray(seriesJson.data.episodes)
       ? seriesJson.data.episodes
       : [];

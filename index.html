@@ -2973,7 +2973,16 @@ async function megavidResolveSource(anime, episodeNum){
   for(const qs of attempts){
     const url = `${MEGAVID_WORKER_BASE}/source?${qs}&ep=${episodeNum}&lang=sub`;
     try{
-      const res = await fetch(url);
+      // 10sn tavan: megavid API'si asılırsa zincir kitlenmez (şu an worker
+      // ağından zaman aşımına uğruyor; iframe yolu yine de denenir).
+      const ctrl = new AbortController();
+      const timer = setTimeout(()=>{ try{ ctrl.abort(); }catch(e){} }, 10000);
+      let res = null;
+      try{
+        res = await fetch(url, { signal: ctrl.signal });
+      }finally{
+        clearTimeout(timer);
+      }
       const data = await res.json().catch(()=>null);
       if(res.ok && data && data.status === 'ok' && data.source) return { data, missing: false };
       if(res.ok && data && data.status === 'error' && /couldn't find|not exist|removed|unavailable yet/i.test(data.message || '')) notFound++;
